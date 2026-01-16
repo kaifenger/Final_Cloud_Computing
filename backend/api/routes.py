@@ -100,7 +100,7 @@ async def discover_concepts(request: DiscoverRequest):
             await neo4j_client.save_graph(nodes, edges)
         except Exception as e:
             # Neo4j保存失败不影响返回结果，只记录错误
-            print(f"⚠️  保存到Neo4j失败: {e}")
+            print(f"[WARNING] 保存到Neo4j失败: {e}")
         
         # 4. 缓存结果
         cache_data = {
@@ -110,7 +110,7 @@ async def discover_concepts(request: DiscoverRequest):
         try:
             await redis_client.cache_result(cache_key, cache_data)
         except Exception as e:
-            print(f"⚠️  缓存失败: {e}")
+            print(f"[WARNING] 缓存失败: {e}")
     
     return DiscoverResponse(
         status=result.get("status", "success"),

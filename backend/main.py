@@ -13,26 +13,26 @@ from .database import neo4j_client, redis_client
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时初始化数据库连接
-    print("🚀 启动应用，初始化数据库连接...")
+    print("[INFO] 启动应用，初始化数据库连接...")
     try:
         await neo4j_client.connect()
-        print("✅ Neo4j连接成功")
+        print("[SUCCESS] Neo4j连接成功")
     except Exception as e:
-        print(f"⚠️  Neo4j连接失败: {e}")
+        print(f"[WARNING] Neo4j连接失败: {e}")
     
     try:
         await redis_client.connect()
-        print("✅ Redis连接成功")
+        print("[SUCCESS] Redis连接成功")
     except Exception as e:
-        print(f"⚠️  Redis连接失败: {e}")
+        print(f"[WARNING] Redis连接失败: {e}")
     
     yield
     
     # 关闭时清理资源
-    print("🛑 关闭应用，清理资源...")
+    print("[INFO] 关闭应用，清理资源...")
     await neo4j_client.disconnect()
     await redis_client.disconnect()
-    print("✅ 资源清理完成")
+    print("[SUCCESS] 资源清理完成")
 
 
 # 创建FastAPI应用实例
