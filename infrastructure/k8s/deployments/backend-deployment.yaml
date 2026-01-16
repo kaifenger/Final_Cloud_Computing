@@ -1,0 +1,119 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conceptgraph-backend
+  namespace: default
+  labels:
+    app: conceptgraph-backend
+    component: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: conceptgraph-backend
+  template:
+    metadata:
+      labels:
+        app: conceptgraph-backend
+        component: api
+    spec:
+      containers:
+      - name: backend
+        image: your-registry/conceptgraph-backend:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        env:
+        - name: NEO4J_URI
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: neo4j_uri
+        - name: NEO4J_USER
+          valueFrom:
+            secretKeyRef:
+              name: db-secrets
+              key: neo4j_user
+        - name: NEO4J_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: db-secrets
+              key: neo4j_password
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: redis_host
+        - name: REDIS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: redis_port
+        - name: MILVUS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: milvus_host
+        - name: MILVUS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: milvus_port
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        volumeMounts:
+        - name: app-logs
+          mountPath: /app/logs
+      volumes:
+      - name: app-logs
+        emptyDir: {}
+      restartPolicy: Always
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: conceptgraph-backend-hpa
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: conceptgraph-backend
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80

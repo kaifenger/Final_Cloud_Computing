@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: conceptgraph-redis
+  namespace: default
+  labels:
+    app: conceptgraph-redis
+spec:
+  type: ClusterIP
+  selector:
+    app: conceptgraph-redis
+  ports:
+  - name: redis
+    protocol: TCP
+    port: 6379
+    targetPort: 6379
+  sessionAffinity: None
