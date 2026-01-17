@@ -48,18 +48,25 @@ class DiscoveryPrompt:
     "discipline": "学科名称",
     "concept_name": "相关概念名称",
     "definition": "概念定义（不超过100字）",
-    "reasoning": "为什么这些概念相关的详细推理（100-300字）",
+    "reasoning": "为什么这些概念相关的推理（80-120字，使用空格不要换行）",
     "common_principle": "共同的底层原理",
     "relation_type": "关系类型（is_foundation_of/similar_to/applied_in/generalizes/derived_from）",
     "strength": 0.85
   }}
 ]
 
+【JSON格式要求】⚠️ 严格遵守
+- 必须是有效的JSON数组格式
+- 所有字符串值不能包含换行符，使用空格代替
+- reasoning字段严格控制在80-120字
+- 不要使用```json```或```代码块
+- 直接返回纯JSON数组，不要有其他文字
+- 检查所有引号、逗号、括号是否匹配
+
 【重要提示】
 - 必须在每个学科至少找出1-2个相关概念
 - 避免表面的文字联系，要找深层原理
 - 如果某个学科确实没有强关联，strength可以设为0.1-0.3并说明原因
-- 输出必须是有效的JSON数组格式
 - 每个学科最多返回{3 if depth == 1 else 5 if depth == 2 else 8}个概念
 
 现在开始推理："""
@@ -97,7 +104,7 @@ class DiscoveryPrompt:
     "discipline": "学科名称",
     "concept_name": "相关概念名称",
     "definition": "概念定义（不超过100字）",
-    "reasoning": "与父节点的关系说明",
+    "reasoning": "与父节点的关系说明（80-120字，不要换行）",
     "relation_type": "关系类型",
     "strength": 0.85
   }}
@@ -159,4 +166,10 @@ class DiscoveryPrompt:
     "strength": 0.95
   }
 ]
+
+⚠️ JSON格式要求：
+1. reasoning字段必须简洁（80-120字），只能使用单行文本，不能包含任何换行符
+2. 所有字符串字段必须：不能包含换行符（\n, \r）、不能包含未转义的引号（"）、不能包含制表符（\t）
+3. 直接输出JSON，不要使用```json```包裹
+4. 输出的JSON必须可以直接被标准JSON解析器解析，不能有任何格式错误
 """

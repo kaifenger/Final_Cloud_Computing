@@ -54,6 +54,19 @@ class VerificationAgent:
                 system_role="你是一个严谨的知识验证专家，负责核查信息的准确性。"
             )
             
+            # 检查响应有效性
+            if not response:
+                logger.error("LLM returned None response")
+                return {
+                    "concept_a": concept_a,
+                    "concept_b": concept_b,
+                    "credibility_score": 0.0,
+                    "is_valid": False,
+                    "evidence": [],
+                    "logical_reasoning": "LLM验证失败",
+                    "warnings": ["LLM响应为空"]
+                }
+            
             # 提取验证结果
             credibility_score = response.get('credibility_score', 0.0)
             is_valid = credibility_score >= self.credibility_threshold

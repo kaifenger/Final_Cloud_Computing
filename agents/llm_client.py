@@ -102,7 +102,7 @@ class LLMClient:
                 request_params = {
                     "model": self.model,
                     "messages": messages,
-                    "temperature": self.temperature,
+                    "temperature": min(0.3, self.temperature),  # 降低随机性，提高JSON格式准确性
                     "max_tokens": self.max_tokens
                 }
                 
@@ -115,7 +115,24 @@ class LLMClient:
                     timeout=self.timeout
                 )
                 
+                # 检查响应有效性
+                if not response or not response.choices or len(response.choices) == 0:
+                    logger.error(f"Invalid LLM response (attempt {attempt + 1})")
+                    if attempt == max_retries - 1:
+                        raise Exception(ErrorCode.LLM_API_ERROR)
+                    await asyncio.sleep(AgentConfig.RETRY_DELAY * (2 ** attempt))
+                    continue
+                
                 content = response.choices[0].message.content
+                
+                # 检查内容有效性
+                if not content:
+                    logger.error(f"Empty content in LLM response (attempt {attempt + 1})")
+                    if attempt == max_retries - 1:
+                        raise Exception(ErrorCode.LLM_API_ERROR)
+                    await asyncio.sleep(AgentConfig.RETRY_DELAY * (2 ** attempt))
+                    continue
+                
                 logger.info(f"LLM response received ({len(content)} chars)")
                 
                 # 记录推理详情（如果有）
@@ -138,6 +155,45 @@ class LLMClient:
         
         raise Exception(ErrorCode.LLM_API_ERROR)
     
+    def _clean_json_response(self, response: str) -> str:
+        """
+        清理LLM响应，移除常见的JSON格式问题
+        
+        Args:
+            response: 原始响应字符串
+            
+        Returns:
+            清理后的响应
+        """
+        import re
+        
+        # 1. 提取JSON块（移除markdown包裹）
+        if "```json" in response:
+            response = response.split("```json")[1].split("```")[0]
+        elif "```" in response:
+            response = response.split("```")[1].split("```")[0]
+        
+        response = response.strip()
+        
+        # 2. 移除BOM和其他不可见字符
+        response = response.replace('\ufeff', '').replace('\u200b', '')
+        
+        # 3. 找到第一个 { 或 [ 和最后一个 } 或 ]
+        start_idx = min(
+            (response.find('{') if '{' in response else len(response)),
+            (response.find('[') if '[' in response else len(response))
+        )
+        
+        end_idx = max(
+            response.rfind('}') if '}' in response else -1,
+            response.rfind(']') if ']' in response else -1
+        )
+        
+        if start_idx < len(response) and end_idx >= 0:
+            response = response[start_idx:end_idx + 1]
+        
+        return response
+    
     async def call_json(
         self,
         prompt: str,
@@ -145,7 +201,7 @@ class LLMClient:
         max_retries: int = 3
     ) -> Dict[str, Any]:
         """
-        调用LLM并解析JSON响应
+        调用LLM并解析JSON响应（带重试机制）
         
         Args:
             prompt: 用户提示
@@ -158,33 +214,49 @@ class LLMClient:
         import json
         from agents.utils import validate_json_output
         
-        response_text = await self.call_with_retry(
-            prompt=prompt,
-            system_role=system_role,
-            max_retries=max_retries
-        )
+        for attempt in range(max_retries):
+            try:
+                response_text = await self.call_with_retry(
+                    prompt=prompt,
+                    system_role=system_role,
+                    max_retries=2
+                )
+                
+                # 检查响应是否为空
+                if not response_text:
+                    raise ValueError("LLM returned empty response")
+                
+                # 预清理响应
+                cleaned_response = self._clean_json_response(response_text)
+                
+                # 尝试解析JSON
+                return validate_json_output(cleaned_response)
+                
+            except ValueError as e:
+                logger.debug(f"JSON解析失败 (attempt {attempt + 1}/{max_retries}): {str(e)}")
+                
+                if attempt < max_retries - 1:
+                    # 重新请求LLM生成更规范的JSON
+                    logger.debug("重新请求LLM生成规范JSON...")
+                    prompt = f"""{prompt}
+
+⚠️ 上一次返回的JSON格式有误，请重新生成。严格要求：
+1. 必须是有效的JSON数组
+2. 所有字符串不能包含换行符
+3. reasoning字段80-120字
+4. 直接返回JSON，不要用```包裹"""
+                    continue
+                else:
+                    # 最后一次尝试失败，抛出异常
+                    raise
+            except Exception as e:
+                logger.error(f"LLM调用失败 (attempt {attempt + 1}/{max_retries}): {str(e)}")
+                if attempt < max_retries - 1:
+                    continue
+                else:
+                    raise
         
-        try:
-            return validate_json_output(response_text)
-        except ValueError as e:
-            logger.error(f"JSON parsing failed: {str(e)}")
-            # 尝试让LLM修复JSON
-            fix_prompt = f"""以下JSON格式有误，请修复并返回有效的JSON：
-
-{response_text}
-
-要求：
-1. 只返回有效的JSON，不要包含任何其他文字
-2. 确保所有引号、括号、逗号都正确
-3. 不要使用markdown代码块"""
-            
-            fixed_response = await self.call_with_retry(
-                prompt=fix_prompt,
-                system_role="You are a JSON formatting expert.",
-                max_retries=2
-            )
-            
-            return validate_json_output(fixed_response)
+        raise ValueError("JSON parsing failed after all retries")
     
     async def call_batch(
         self,

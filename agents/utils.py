@@ -50,37 +50,64 @@ def validate_json_output(json_str: str) -> Dict[str, Any]:
         data = json.loads(json_str)
         return data
     except json.JSONDecodeError as e:
-        logger.warning(f"JSON解析失败，尝试自动修复: {str(e)}")
+        logger.debug(f"JSON解析失败，尝试自动修复: {str(e)}")
         
         # 尝试修复常见的JSON错误
         try:
             import re
             
-            # 1. 修复无效的转义字符（如 \e, \a 等）
-            # 这个正则匹配反斜杠后面不是合法转义字符的情况
-            # 合法的JSON转义: \", \\, \/, \b, \f, \n, \r, \t, \uXXXX
+            # 1. 首先修复字符串内的换行符（必须在转义修复之前）
+            # 查找所有字符串字段并修复其中的换行符
+            def fix_string_content(match):
+                key = match.group(1)
+                value = match.group(2)
+                # 替换字符串值中的换行、回车、制表符
+                value = value.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+                # 移除多余空格
+                value = ' '.join(value.split())
+                return f'"{key}": "{value}"'
+            
             fixed_json = re.sub(
-                r'\\(?!["\\/bfnrtu])',  # 匹配不是合法转义的反斜杠
-                r'\\\\',  # 替换为双反斜杠（转义反斜杠本身）
+                r'"([^"]+)"\s*:\s*"([^"]*(?:\n|\r|\t)[^"]*?)"',
+                fix_string_content,
                 json_str
             )
             
-            # 2. 如果还是失败，尝试更激进的修复
+            # 2. 修复无效的转义字符（如 \e, \a 等）
+            # 合法的JSON转义: \", \\, \/, \b, \f, \n, \r, \t, \uXXXX
+            fixed_json = re.sub(
+                r'\\(?!["\\/bfnrtu])',  # 匹配不是合法转义的反斜杠
+                r'\\\\',  # 替换为双反斜杠
+                fixed_json
+            )
+            
+            # 3. 移除尾部逗号（JSON不允许）
+            fixed_json = re.sub(r',\s*([}\]])', r'\1', fixed_json)
+            
+            # 先尝试解析
             try:
                 data = json.loads(fixed_json)
-                logger.info("✓ JSON自动修复成功（转义字符修复）")
+                logger.debug("✓ JSON自动修复成功")
                 return data
-            except json.JSONDecodeError:
-                # 尝试使用json.loads的strict=False（如果可用）
-                # 或者手动清理更多问题
-                fixed_json2 = fixed_json.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
-                data = json.loads(fixed_json2)
-                logger.info("✓ JSON自动修复成功（换行符修复）")
-                return data
+            except json.JSONDecodeError as e2:
+                # 如果是未闭合字符串错误，尝试修复
+                if "Unterminated string" in str(e2):
+                    lines = fixed_json.split('\n')
+                    for i, line in enumerate(lines):
+                        # 检查引号是否配对
+                        quote_count = line.count('"') - line.count('\\"')
+                        if quote_count % 2 != 0:
+                            lines[i] = line + '"'
+                    fixed_json = '\n'.join(lines)
+                    data = json.loads(fixed_json)
+                    logger.debug("✓ JSON自动修复成功（未闭合字符串）")
+                    return data
+                else:
+                    raise
                 
         except Exception as repair_error:
             # 如果修复失败，记录详细错误并抛出
-            logger.error(f"JSON修复失败: {str(repair_error)}")
+            logger.debug(f"JSON修复失败: {str(repair_error)}")
             logger.debug(f"原始JSON (前500字符): {json_str[:500]}")
             raise ValueError(f"Invalid JSON format: {str(e)}")
 
