@@ -43,10 +43,10 @@ class ConceptDiscoveryAgent:
         if not disciplines:
             disciplines = Discipline.ALL
         
-        # 验证学科
-        invalid_disciplines = [d for d in disciplines if d not in Discipline.ALL]
-        if invalid_disciplines:
-            raise ValueError(f"Invalid disciplines: {invalid_disciplines}")
+        # 允许非标准学科（如"信息论"等细分领域），由LLM处理
+        # 只验证非空即可
+        if not disciplines or all(not d.strip() for d in disciplines):
+            raise ValueError("Disciplines cannot be empty")
         
         try:
             # 生成Prompt
