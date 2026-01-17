@@ -225,3 +225,7 @@ class SemanticSimilarity:
     def get_cache_size(self) -> int:
         """获取缓存大小"""
         return len(self._embedding_cache)
+
+
+# Alias for compatibility
+SemanticSimilarityCalculator = SemanticSimilarity
