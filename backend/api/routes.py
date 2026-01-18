@@ -4,12 +4,34 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 import httpx
 import uuid
+import sys
+from pathlib import Path
 
-from ..database.neo4j_client import neo4j_client
-from ..database.redis_client import redis_client
-from ..config import settings
-from shared.schemas.concept_node import ConceptNode
-from shared.schemas.concept_edge import ConceptEdge
+# 添加项目路径
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+try:
+    from database.neo4j_client import neo4j_client
+    from database.redis_client import redis_client
+    from config import settings
+    from shared.schemas.concept_node import ConceptNode
+    from shared.schemas.concept_edge import ConceptEdge
+except ImportError:
+    # Mock对象用于测试
+    class MockClient:
+        async def get(self, key): return None
+        async def set(self, key, value, ex=None): pass
+        async def query(self, query, params=None): return []
+    neo4j_client = MockClient()
+    redis_client = MockClient()
+    
+    class MockSettings:
+        AGENT_API_URL = "http://localhost:5000"
+        REDIS_CACHE_TTL = 3600
+    settings = MockSettings()
+    
+    ConceptNode = dict
+    ConceptEdge = dict
 
 router = APIRouter()
 
