@@ -52,7 +52,7 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
         }) as any
     );
 
-    // 绘制边（增强动画效果）
+    // 绘制边
     const link = g.append('g')
       .attr('class', 'links')
       .selectAll('line')
@@ -62,12 +62,7 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
       .attr('class', 'link')
       .attr('stroke', '#999')
       .attr('stroke-opacity', 0.5)
-      .attr('stroke-width', (d) => Math.max(2, d.weight * 5))
-      .attr('stroke-dasharray', '1000')
-      .attr('stroke-dashoffset', '1000')
-      .transition()
-      .duration(1000)
-      .attr('stroke-dashoffset', '0');
+      .attr('stroke-width', (d) => Math.max(2, d.weight * 5));
 
     // 绘制节点组
     const nodeGroup = g.append('g')
@@ -97,7 +92,9 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
         if (onNodeClick) onNodeClick(d);
       })
       .on('mouseenter', function(_event, d) {
-        d3.select(this)
+        const element = d3.select(this);
+        element.interrupt(); // 中断之前的动画
+        element
           .transition()
           .duration(200)
           .attr('r', (d.credibility ? 10 + d.credibility * 8 : 15) * 1.3)
@@ -107,7 +104,9 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
       .on('mouseleave', function(_event, d) {
         const isSelected = d3.select((this as any).parentNode).classed('selected');
         if (!isSelected) {
-          d3.select(this)
+          const element = d3.select(this);
+          element.interrupt(); // 中断之前的动画
+          element
             .transition()
             .duration(200)
             .attr('r', d.credibility ? 10 + d.credibility * 8 : 15)

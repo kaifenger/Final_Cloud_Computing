@@ -79,21 +79,6 @@ app.add_middleware(
 if routes:
     app.include_router(routes.router, prefix=getattr(settings, 'API_PREFIX', '/api/v1'))
 
-# 添加测试路由
-@app.post("/api/v1/discover")
-async def discover_test(data: dict):
-    """临时测试接口"""
-    return {
-        "status": "success",
-        "request_id": "test-123",
-        "data": {
-            "nodes": [
-                {"id": "1", "label": data.get("concept", "示例概念"), "discipline": "计算机科学", "definition": "测试定义", "credibility": 0.95}
-            ],
-            "edges": []
-        }
-    }
-
 # 根路径
 @app.get("/")
 async def root():
