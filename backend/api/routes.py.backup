@@ -1,0 +1,1083 @@
+﻿"""AP"""
+from fastap mport APRouter, HTTPExcepton, Query
+from pydantc mport BaseModel, Feld
+from typng mport Lst, Optonal, Dct, Any
+mport httpx
+mport uud
+mport sys
+mport asynco
+mport os
+mport wkpeda
+from pathlb mport Path
+from dotenv mport load_dotenv
+from opena mport AsyncOpenA
+
+# 
+env_path = Path(__fle__).parent.parent.parent / ".env"
+load_dotenv(dotenv_path=env_path)
+
+# 
+try:
+    from ap.real_node_generator mport get_node_generator
+    USE_REAL_GENERATON = True
+    prnt("[NFO] ")
+except mportError:
+    USE_REAL_GENERATON = False
+    prnt("[WARNNG] Mock")
+
+# ==================== LLM?====================
+_llm_clent = None
+
+def get_llm_clent():
+    """LLM?""
+    global _llm_clent
+    f _llm_clent s None:
+        ap_key = os.getenv("OPENROUTER_AP_KEY") or os.getenv("OPENA_AP_KEY")
+        f ap_key:
+            _llm_clent = AsyncOpenA(
+                ap_key=ap_key,
+                base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.a/ap/v1")
+            )
+            prnt("[NFO] LLM?)
+    return _llm_clent
+
+
+async def translate_to_englsh(chnese_text: str) -> str:
+    """
+    LLM
+    
+    Args:
+        chnese_text: 
+        
+    Returns:
+        
+    """
+    clent = get_llm_clent()
+    f not clent:
+        return chnese_text
+    
+    try:
+        response = awat asynco.wat_for(
+            clent.chat.completons.create(
+                model=os.getenv("LLM_MODEL", "google/gemn-2.0-flash-001"),
+                messages=[
+                    {"role": "system", "content": "?},
+                    {"role": "user", "content": f"{chnese_text}"}
+                ],
+                temperature=0.1,
+                max_tokens=50
+            ),
+            tmeout=10.0
+        )
+        
+        f response and response.choces:
+            translaton = response.choces[0].message.content.strp().strp('"\'""''')
+            prnt(f"[SUCCESS] : {chnese_text} -> {translaton}")
+            return translaton
+    except Excepton as e:
+        prnt(f"[WARNNG] : {chnese_text}, {str(e)}")
+    
+    return chnese_text
+
+
+async def generate_bref_summary(concept: str, wk_defnton: str = "") -> str:
+    """
+    LLM
+    
+    Args:
+        concept: 
+        wk_defnton: 
+        
+    Returns:
+        30-80
+    """
+    clent = get_llm_clent()
+    f not clent:
+        # LLM?
+        f wk_defnton:
+            return wk_defnton[:100] + "..." f len(wk_defnton) > 100 else wk_defnton
+        return f"{concept}?
+    
+    try:
+        prompt = f""""{concept}"30-80
+1. 
+2. ?
+3. ""???
+
+{f'{wk_defnton[:200]}' f wk_defnton else ''}
+
+?""
+
+        response = awat asynco.wat_for(
+            clent.chat.completons.create(
+                model=os.getenv("LLM_MODEL", "google/gemn-2.0-flash-001"),
+                messages=[
+                    {"role": "system", "content": "?},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=150
+            ),
+            tmeout=15.0
+        )
+        
+        f response and response.choces:
+            summary = response.choces[0].message.content.strp()
+            # ?
+            summary = summary.strp('"\'""''')
+            prnt(f"[SUCCESS] LLM? {concept} -> {summary[:50]}...")
+            return summary
+    except asynco.TmeoutError:
+        prnt(f"[WARNNG] LLM? {concept}")
+    except Excepton as e:
+        prnt(f"[WARNNG] LLM? {concept}, {str(e)}")
+    
+    # 
+    f wk_defnton:
+        return wk_defnton[:100] + "..." f len(wk_defnton) > 100 else wk_defnton
+    return f"{concept}?
+
+# 
+sys.path.nsert(0, str(Path(__fle__).parent.parent.parent))
+
+# ?
+ENABLE_EXTERNAL_VERFCATON = os.getenv("ENABLE_EXTERNAL_VERFCATON", "false").lower() == "true"
+prnt(f"[NFO] ? {'' f ENABLE_EXTERNAL_VERFCATON else ''}")
+
+try:
+    from database.neo4j_clent mport neo4j_clent
+    from database.reds_clent mport reds_clent
+    from confg mport settngs
+    from shared.schemas.concept_node mport ConceptNode
+    from shared.schemas.concept_edge mport ConceptEdge
+except mportError:
+    # Mock
+    class MockClent:
+        async def get(self, key): return None
+        async def set(self, key, value, ex=None): pass
+        async def query(self, query, params=None): return []
+        async def create_concept_node(self, node): pass
+        async def create_concept_edge(self, edge): pass
+    neo4j_clent = MockClent()
+    reds_clent = MockClent()
+    
+    class MockSettngs:
+        AGENT_AP_URL = "http://localhost:5000"
+        REDS_CACHE_TTL = 3600
+    settngs = MockSettngs()
+    
+    ConceptNode = dct
+    ConceptEdge = dct
+
+router = APRouter()
+
+
+# ==================== AP ====================
+
+async def get_wkpeda_defnton(concept: str, max_length: nt = 500) -> Dct[str, Any]:
+    """
+    wkpeda
+    
+    AP?
+    - ?
+    - ?
+    - 
+    
+    Args:
+        concept: 
+        max_length: ?
+        
+    Returns:
+        {
+            "defnton": str,  # 
+            "exsts": bool,     # 
+            "url": str,         # 
+            "source": str       # 
+        }
+    """
+    # 
+    f not ENABLE_EXTERNAL_VERFCATON:
+        return {
+            "defnton": "",
+            "exsts": False,
+            "url": "",
+            "source": "LLM"
+        }
+    
+    prnt(f"[NFO] Wkpeda: {concept}")
+    
+    loop = asynco.get_event_loop()
+    
+    # ?
+    try:
+        wkpeda.set_lang("zh")
+        page = awat loop.run_n_executor(None, wkpeda.page, concept)
+        summary = page.summary[:max_length] f len(page.summary) > max_length else page.summary
+        prnt(f"[SUCCESS] Wkpeda: {concept}")
+        return {
+            "defnton": summary,
+            "exsts": True,
+            "url": page.url,
+            "source": "Wkpeda"
+        }
+    except wkpeda.exceptons.DsambguatonError as e:
+        # 
+        f e.optons:
+            try:
+                page = awat loop.run_n_executor(None, wkpeda.page, e.optons[0])
+                summary = page.summary[:max_length] f len(page.summary) > max_length else page.summary
+                prnt(f"[SUCCESS] Wkpeda(): {concept} -> {e.optons[0]}")
+                return {
+                    "defnton": summary,
+                    "exsts": True,
+                    "url": page.url,
+                    "source": "Wkpeda"
+                }
+            except Excepton:
+                pass
+    except wkpeda.exceptons.PageError:
+        pass
+    except Excepton as e:
+        prnt(f"[WARNNG] Wkpeda: {e}")
+    
+    # ?
+    try:
+        wkpeda.set_lang("en")
+        page = awat loop.run_n_executor(None, wkpeda.page, concept)
+        summary = page.summary[:max_length] f len(page.summary) > max_length else page.summary
+        prnt(f"[SUCCESS] Wkpeda: {concept}")
+        return {
+            "defnton": summary,
+            "exsts": True,
+            "url": page.url,
+            "source": "Wkpeda"
+        }
+    except wkpeda.exceptons.DsambguatonError as e:
+        f e.optons:
+            try:
+                page = awat loop.run_n_executor(None, wkpeda.page, e.optons[0])
+                summary = page.summary[:max_length] f len(page.summary) > max_length else page.summary
+                prnt(f"[SUCCESS] Wkpeda(): {concept} -> {e.optons[0]}")
+                return {
+                    "defnton": summary,
+                    "exsts": True,
+                    "url": page.url,
+                    "source": "Wkpeda"
+                }
+            except Excepton:
+                pass
+    except wkpeda.exceptons.PageError:
+        pass
+    except Excepton as e:
+        prnt(f"[WARNNG] Wkpeda: {e}")
+    
+    prnt(f"[WARNNG] Wkpeda? {concept}")
+    return {
+        "defnton": "",
+        "exsts": False,
+        "url": "",
+        "source": "LLM"
+    }
+
+
+async def search_arxv_papers(query: str, max_results: nt = 5) -> tuple[Lst[Dct[str, Any]], str]:
+    """
+    Arxv
+    
+    Args:
+        query: ?
+        max_results: 
+        
+    Returns:
+        (, ) - error_msgNone?
+    """
+    # 
+    f not ENABLE_EXTERNAL_VERFCATON:
+        return [], "Arxv?
+    
+    # 
+    f any('\u4e00' <= char <= '\u9fff' for char n query):
+        prnt(f"[NFO] ? {query}")
+        query = awat translate_to_englsh(query)
+        prnt(f"[NFO] ? {query}")
+    
+    prnt(f"[NFO] Arxv: {query}")
+    mport xml.etree.ElementTree as ET
+    
+    # HTTPS URL
+    arxv_url = "https://export.arxv.org/ap/query"
+    params = {
+        "search_query": f"all:{query}",
+        "start": 0,
+        "max_results": max_results,
+        "sortBy": "relevance",
+        "sortOrder": "descendng"
+    }
+    
+    try:
+        async wth httpx.AsyncClent(tmeout=10.0, follow_redrects=True) as clent:
+            response = awat clent.get(arxv_url, params=params)
+            f response.status_code != 200:
+                error_msg = f"Arxv AP {response.status_code}"
+                prnt(f"[WARNNG] {error_msg}")
+                return [], error_msg
+            
+            # XML
+            root = ET.fromstrng(response.text)
+            ns = {
+                'atom': 'http://www.w3.org/2005/Atom',
+                'arxv': 'http://arxv.org/schemas/atom'
+            }
+            
+            papers = []
+            for entry n root.fndall('atom:entry', ns):
+                ttle = entry.fnd('atom:ttle', ns)
+                summary = entry.fnd('atom:summary', ns)
+                lnk = entry.fnd('atom:d', ns)
+                publshed = entry.fnd('atom:publshed', ns)
+                
+                authors = []
+                for author n entry.fndall('atom:author', ns):
+                    name = author.fnd('atom:name', ns)
+                    f name s not None:
+                        authors.append(name.text.strp())
+                
+                papers.append({
+                    "ttle": ttle.text.strp() f ttle s not None else "",
+                    "authors": authors[:3],  # ??
+                    "summary": (summary.text.strp()[:200] + "...") f summary s not None and len(summary.text.strp()) > 200 else (summary.text.strp() f summary s not None else ""),
+                    "lnk": lnk.text.strp() f lnk s not None else "",
+                    "publshed": publshed.text.strp()[:10] f publshed s not None else ""
+                })
+            
+            prnt(f"[SUCCESS] Arxv{len(papers)}?)
+            return papers, None
+    except httpx.TmeoutExcepton:
+        error_msg = "Arxv AP"
+        prnt(f"[ERROR] {error_msg}")
+        return [], error_msg
+    except httpx.HTTPError as e:
+        error_msg = f"Arxv AP: {str(e)}"
+        prnt(f"[ERROR] {error_msg}")
+        return [], error_msg
+    except Excepton as e:
+        error_msg = f"Arxv: {str(e)}"
+        prnt(f"[ERROR] {error_msg}")
+        return [], error_msg
+
+
+# ==================== LLM ====================
+
+async def get_real_dscovery_result(concept: str, max_concepts: nt = 10) -> dct:
+    """LLMMock"""
+    
+    generator = get_node_generator()
+    
+    # 1. 
+    s_academc = awat generator.s_academc_concept(concept)
+    f not s_academc:
+        prnt(f"[WARNNG] '{concept}'")
+        return {
+            "status": "error",
+            "message": f"'{concept}'",
+            "data": {"nodes": [], "edges": [], "metadata": {}}
+        }
+    
+    # 2. LLM
+    prnt(f"[NFO] LLM: {concept}")
+    related_concepts = awat generator.generate_related_concepts(concept, max_concepts)
+    
+    f not related_concepts:
+        prnt(f"[WARNNG] ")
+        related_concepts = [{"label": concept, "dscplne": "", "relaton": "self"}]
+    
+    # 3. Wkpeda
+    nodes = []
+    center_concept = concept  # 
+    
+    # 
+    center_wk = awat get_wkpeda_defnton(concept, max_length=500)
+    center_bref = awat generate_bref_summary(concept, center_wk.get("defnton", ""))
+    
+    center_node = {
+        "d": f"{concept.replace(' ', '_')}_0",
+        "label": concept,
+        "dscplne": "",
+        "defnton": truncate_defnton(center_wk.get("defnton", f"{concept}"), 500),
+        "bref_summary": center_bref,
+        "credblty": 1.0,  # credblty1
+        "source": "Wkpeda" f center_wk.get("exsts") else "LLM",
+        "wk_url": center_wk.get("url", "")
+    }
+    nodes.append(center_node)
+    
+    # 
+    for dx, rel_concept n enumerate(related_concepts, 1):
+        label = rel_concept["label"]
+        dscplne = rel_concept["dscplne"]
+        
+        # Wkpeda
+        wk_result = awat get_wkpeda_defnton(label, max_length=500)
+        defnton = wk_result.get("defnton", f"{label}{concept}")
+        
+        # LLM
+        bref_summary = awat generate_bref_summary(label, defnton)
+        
+        # ****
+        smlarty = awat generator.compute_smlarty(
+            f"{concept}: {center_wk.get('defnton', '')[:200]}",
+            f"{label}: {defnton[:200]}"
+        )
+        
+        # Credblty
+        base_credblty = 0.95 f wk_result.get("exsts") else 0.70
+        credblty = mn(0.99, base_credblty * (0.7 + 0.3 * smlarty))  # 
+        
+        prnt(f"[DEBUG] {label}: ={smlarty:.3f}, Credblty={credblty:.3f}")
+        
+        node_d = f"{label.replace(' ', '_')}_{dscplne.replace(' ', '_')}_{dx}"
+        nodes.append({
+            "d": node_d,
+            "label": label,
+            "dscplne": dscplne,
+            "defnton": truncate_defnton(defnton, 500),
+            "bref_summary": bref_summary,
+            "credblty": round(credblty, 3),
+            "smlarty": round(smlarty, 3),  # 
+            "source": "Wkpeda" f wk_result.get("exsts") else "LLM",
+            "wk_url": wk_result.get("url", "")
+        })
+    
+    # 4. LLM
+    edges = []
+    for dx, rel_concept n enumerate(related_concepts, 1):
+        f dx < len(nodes):
+            edge = {
+                "source": center_node["d"],
+                "target": nodes[dx]["d"],
+                "relaton": rel_concept.get("relaton", "related"),
+                "weght": nodes[dx]["credblty"],  # credblty
+                "reasonng": f"{concept}{rel_concept['label']}{rel_concept.get('relaton', 'related')}"
+            }
+            edges.append(edge)
+    
+    prnt(f"[SUCCESS] LLM {len(nodes)} , {len(edges)} ")
+    
+    # 5. Arxv
+    arxv_papers, arxv_error = [], None
+    f ENABLE_EXTERNAL_VERFCATON:
+        try:
+            arxv_papers, arxv_error = awat asynco.wat_for(
+                search_arxv_papers(concept, max_results=5),
+                tmeout=5.0
+            )
+        except Excepton as e:
+            arxv_error = str(e)
+    
+    return {
+        "status": "success",
+        "data": {
+            "nodes": nodes,
+            "edges": edges,
+            "metadata": {
+                "total_nodes": len(nodes),
+                "total_edges": len(edges),
+                "verfed_nodes": sum(1 for n n nodes f n["source"] == "Wkpeda"),
+                "avg_credblty": sum(n["credblty"] for n n nodes) / len(nodes) f nodes else 0,
+                "avg_smlarty": sum(n.get("smlarty", 0) for n n nodes[1:]) / max(len(nodes) - 1, 1),
+                "processng_tme": 2.0,
+                "mode": "real_llm_generaton",
+                "arxv_papers": arxv_papers,
+                "arxv_status": "success" f not arxv_error else "faled"
+            }
+        }
+    }
+
+
+# ==================== Mock ====================
+
+def truncate_defnton(text: str, max_length: nt = 500) -> str:
+    """?""
+    f not text:
+        return ""
+    f len(text) <= max_length:
+        return text
+    return text[:max_length - 3] + "..."
+
+
+async def get_mock_dscovery_result(concept: str) -> dct:
+    """"""
+    
+    # ?
+    concept_dscplnes = {
+        "?: [
+            {"label": "?, "dscplne": "?, "eng_name": "entropy thermodynamcs"},
+            {"label": "?, "dscplne": "?, "eng_name": "nformaton entropy"},
+            {"label": "?, "dscplne": "", "eng_name": "statstcal entropy"},
+            {"label": "?, "dscplne": "?, "eng_name": "Shannon entropy"},
+            {"label": "?, "dscplne": "?, "eng_name": "Boltzmann entropy"},
+            {"label": "", "dscplne": "", "eng_name": "maxmum entropy prncple"},
+        ],
+        "": [
+            {"label": "", "dscplne": "?, "eng_name": "neural network"},
+            {"label": "?, "dscplne": "?, "eng_name": "neuron"},
+            {"label": "?, "dscplne": "", "eng_name": "actvaton functon"},
+            {"label": "", "dscplne": "", "eng_name": "backpropagaton"},
+            {"label": "", "dscplne": "", "eng_name": "convolutonal neural network"},
+            {"label": "", "dscplne": "", "eng_name": "recurrent neural network"},
+        ],
+        "": [
+            {"label": "", "dscplne": "", "eng_name": "deep learnng"},
+            {"label": "", "dscplne": "", "eng_name": "gradent descent"},
+            {"label": "", "dscplne": "", "eng_name": "loss functon"},
+            {"label": "?, "dscplne": "?, "eng_name": "overfttng"},
+            {"label": "?, "dscplne": "", "eng_name": "regularzaton"},
+            {"label": "?, "dscplne": "", "eng_name": "batch normalzaton"},
+        ],
+        "": [
+            {"label": "", "dscplne": "?, "eng_name": "quantum computng"},
+            {"label": "", "dscplne": "", "eng_name": "qubt"},
+            {"label": "", "dscplne": "", "eng_name": "quantum entanglement"},
+            {"label": "?, "dscplne": "", "eng_name": "quantum gate"},
+            {"label": "", "dscplne": "", "eng_name": "quantum algorthm"},
+            {"label": "", "dscplne": "", "eng_name": "quantum decoherence"},
+        ]
+    }
+    
+    # 
+    default_concepts = [
+        {"label": concept, "dscplne": "?, "eng_name": concept},
+        {"label": f"{concept}?, "dscplne": "", "eng_name": f"{concept} applcatons"},
+        {"label": f"{concept}", "dscplne": "", "eng_name": f"{concept} theory"},
+        {"label": f"{concept}?, "dscplne": "?, "eng_name": f"{concept} hstory"},
+        {"label": f"{concept}?, "dscplne": "", "eng_name": f"{concept} mathematcal model"},
+    ]
+    
+    # 
+    concept_lst = concept_dscplnes.get(concept, default_concepts)
+    
+    # LLM?
+    nodes = []
+    for dx, c n enumerate(concept_lst):
+        node_d = f"{c['label'].replace(' ', '_')}_{c['dscplne'].replace(' ', '_')}_{dx}"
+        
+        # 
+        wk_result = awat get_wkpeda_defnton(c['label'], max_length=500)
+        
+        # 
+        f not wk_result["exsts"] and c.get("eng_name"):
+            wk_result = awat get_wkpeda_defnton(c['eng_name'], max_length=500)
+        
+        # ?
+        f wk_result["exsts"]:
+            defnton = wk_result["defnton"]
+            source = "Wkpeda"
+            credblty = 0.95
+        else:
+            # LLM?
+            defnton = f"{c['label']}{c['dscplne']}?
+            source = "LLM"
+            credblty = 0.75
+        
+        # LLM?
+        bref_summary = awat generate_bref_summary(c['label'], defnton)
+        
+        nodes.append({
+            "d": node_d,
+            "label": c['label'],
+            "dscplne": c['dscplne'],
+            "defnton": truncate_defnton(defnton, 500),
+            "bref_summary": bref_summary,  # LLM?
+            "credblty": credblty,
+            "source": source,
+            "wk_url": wk_result.get("url", "")
+        })
+    
+    # ?
+    edges = []
+    f len(nodes) > 1:
+        # 
+        center_node = nodes[0]
+        prnt(f"[DEBUG] : {center_node['d']} ({center_node['label']})")
+        for , node n enumerate(nodes[1:], 1):
+            edge = {
+                "source": center_node["d"],
+                "target": node["d"],
+                "relaton": "related_to",
+                "weght": 0.8 - ( * 0.05),
+                "reasonng": f"{center_node['label']}{node['label']}"
+            }
+            edges.append(edge)
+            prnt(f"[DEBUG] ? {edge['source']} -> {edge['target']}")
+    
+    prnt(f"[DEBUG]  {len(nodes)} ? {len(edges)} ")
+    
+    # arxv
+    arxv_papers = []
+    arxv_error = "Arxv?
+    
+    # 
+    f ENABLE_EXTERNAL_VERFCATON:
+        try:
+            mport asynco
+            arxv_papers, arxv_error = awat asynco.wat_for(
+                search_arxv_papers(concept, max_results=5),
+                tmeout=5.0  # 5?
+            )
+        except asynco.TmeoutError:
+            prnt(f"[WARNNG] Arxv?)
+            arxv_error = "Arxv"
+        except Excepton as e:
+            prnt(f"[ERROR] Arxv: {str(e)}")
+            arxv_error = f"Arxv: {str(e)}"
+    
+    return {
+        "status": "success",
+        "data": {
+            "nodes": nodes,
+            "edges": edges,
+            "metadata": {
+                "total_nodes": len(nodes),
+                "total_edges": len(edges),
+                "verfed_nodes": sum(1 for n n nodes f n["source"] == "Wkpeda"),
+                "avg_credblty": sum(n["credblty"] for n n nodes) / len(nodes) f nodes else 0,
+                "processng_tme": 1.5,
+                "mode": "mock_wth_wkpeda",
+                "arxv_papers": arxv_papers,
+                "arxv_status": "success" f arxv_error s None else "faled",
+                "arxv_error": arxv_error
+            }
+        }
+    }
+
+
+# ==================== / ====================
+
+class DscoverRequest(BaseModel):
+    """"""
+    concept: str = Feld(..., mn_length=1, max_length=100, descrpton="")
+    dscplnes: Optonal[Lst[str]] = Feld(
+        default=None, 
+        descrpton="?
+    )
+    depth: nt = Feld(default=2, ge=1, le=3, descrpton="")
+    max_concepts: nt = Feld(default=30, ge=10, le=100, descrpton="")
+
+
+class DscoverResponse(BaseModel):
+    """"""
+    status: str
+    request_d: str
+    data: Dct[str, Any]
+
+
+class GraphResponse(BaseModel):
+    """"""
+    status: str
+    data: Dct[str, Any]
+
+
+# ==================== AP ====================
+
+@router.post("/dscover", response_model=DscoverResponse)
+async def dscover_concepts(request: DscoverRequest):
+    """ - LLM
+    
+    
+    1. Reds
+    2. LLM
+    3. 
+    4. Neo4j
+    5. Reds
+    """
+    
+    # 1. ?
+    cache_key = f"dscover:{request.concept}:{':'.jon(request.dscplnes or [])}"
+    cached = awat reds_clent.get(cache_key)
+    f cached:
+        return DscoverResponse(
+            status="success",
+            request_d=cached["request_d"],
+            data=cached["data"]
+        )
+    
+    # 2. AgentA?
+    agent_url = f"{settngs.AGENT_AP_URL}/dscover"
+    request_d = str(uud.uud4())
+    result = None
+    
+    # MockLLMArxv?
+    f USE_REAL_GENERATON:`n        prnt(f"[NFO]  LLM: {request.concept}")`n        result = awat get_real_dscovery_result(request.concept, request.max_concepts)`n    else:`n        prnt(f"[WARNNG]  Mock")`n        result = awat get_mock_dscovery_result(request.concept)
+    
+    # LLMarxv?
+    # ENABLE_EXTERNAL_VERFCATON=false
+    """
+    try:
+        from agents.orchestrator mport get_orchestrator
+        from dotenv mport load_dotenv
+        load_dotenv()  # 
+        
+        orchestrator = get_orchestrator()
+        prnt(f"[NFO] LLM: {request.concept}")
+        
+        response_obj = awat orchestrator.dscover(
+            concept=request.concept,
+            dscplnes=request.dscplnes,
+            depth=request.depth,
+            max_concepts=request.max_concepts,
+            enable_verfcaton=False  # 
+        )
+    """
+    
+    # 3. Neo4j
+    f result.get("status") == "success":
+        nodes = result["data"]["nodes"]
+        edges = result["data"]["edges"]
+        
+        try:
+            # 
+            for node n nodes:
+                awat neo4j_clent.create_concept_node(node)
+            # ?
+            for edge n edges:
+                awat neo4j_clent.create_concept_edge(edge)
+        except Excepton as e:
+            # Neo4j?
+            prnt(f"[WARNNG] Neo4j: {e}")
+        
+        # 4. 
+        cache_data = {
+            "request_d": request_d,
+            "data": result["data"]
+        }
+        try:
+            awat reds_clent.set(cache_key, cache_data, ex=3600)
+        except Excepton as e:
+            prnt(f"[WARNNG] : {e}")
+    
+    # ?
+    response_data = result.get("data", {})
+    prnt(f"[DEBUG] : {len(response_data.get('nodes', []))} ? {len(response_data.get('edges', []))} ")
+    f response_data.get('edges'):
+        prnt(f"[DEBUG] ? {[(e['source'], e['target']) for e n response_data['edges'][:3]]}...")
+    
+    return DscoverResponse(
+        status=result.get("status", "success"),
+        request_d=request_d,
+        data=result.get("data", {})
+    )
+
+
+@router.get("/graph/{concept_d}", response_model=GraphResponse)
+async def get_graph(concept_d: str):
+    """?
+    
+    Args:
+        concept_d: D
+        
+    Returns:
+        nodes + edges?
+    """
+    try:
+        graph_data = awat neo4j_clent.query_graph(concept_d)
+        return GraphResponse(
+            status="success",
+            data=graph_data
+        )
+    except Excepton as e:
+        rase HTTPExcepton(
+            status_code=500,
+            detal=f": {str(e)}"
+        )
+
+
+@router.get("/concepts/search")
+async def search_concepts(
+    keyword: str = Query(..., mn_length=1, descrpton="?),
+    lmt: nt = Query(default=10, ge=1, le=50, descrpton="")
+):
+    """
+    
+    Args:
+        keyword: ?
+        lmt: 
+        
+    Returns:
+        ?
+    """
+    try:
+        concepts = awat neo4j_clent.search_concepts(keyword, lmt)
+        return {
+            "status": "success",
+            "data": {
+                "keyword": keyword,
+                "total": len(concepts),
+                "concepts": concepts
+            }
+        }
+    except Excepton as e:
+        rase HTTPExcepton(
+            status_code=500,
+            detal=f": {str(e)}"
+        )
+
+
+@router.get("/dscplnes")
+async def get_dscplnes():
+    """?""
+    try:
+        dscplnes = awat neo4j_clent.get_all_dscplnes()
+        return {
+            "status": "success",
+            "data": {
+                "dscplnes": dscplnes,
+                "total": len(dscplnes)
+            }
+        }
+    except Excepton as e:
+        rase HTTPExcepton(
+            status_code=500,
+            detal=f": {str(e)}"
+        )
+
+
+@router.delete("/cache/clear")
+async def clear_cache(pattern: str = Query(default="*", descrpton="?)):
+    """
+    
+    Args:
+        pattern: ?"dscover:*"
+    """
+    try:
+        awat reds_clent.clear_pattern(pattern)
+        return {
+            "status": "success",
+            "message": f"?'{pattern}' ?
+        }
+    except Excepton as e:
+        rase HTTPExcepton(
+            status_code=500,
+            detal=f": {str(e)}"
+        )
+
+
+@router.get("/stats")
+async def get_stats():
+    """"""
+    try:
+        reds_stats = awat reds_clent.get_stats()
+        return {
+            "status": "success",
+            "data": {
+                "reds": reds_stats,
+                "neo4j": {
+                    "connected": awat neo4j_clent.s_connected()
+                }
+            }
+        }
+    except Excepton as e:
+        rase HTTPExcepton(
+            status_code=500,
+            detal=f": {str(e)}"
+        )
+
+@router.get("/concept/{concept_name}/detal")
+async def get_concept_detal(concept_name: str):
+    """
+    
+    ""?
+    """
+    # 
+    wk_result = awat get_wkpeda_defnton(concept_name, max_length=500)
+    
+    # arxv
+    arxv_papers, arxv_error = awat search_arxv_papers(concept_name, max_results=5)
+    
+    # ?
+    detaled_ntro = f"""
+**{concept_name}** ?
+
+### 
+{wk_result['defnton'] f wk_result['exsts'] else f'{concept_name}?}
+
+### 
+{concept_name}?
+- ****?
+- **?*
+- **?*?
+- ****
+
+### 
+?
+
+### 
+{concept_name}?
+
+### 
+{concept_name}?
+"""
+    
+    return {
+        "status": "success",
+        "data": {
+            "concept": concept_name,
+            "wk_defnton": wk_result["defnton"] f wk_result["exsts"] else None,
+            "wk_url": wk_result["url"] f wk_result["exsts"] else None,
+            "wk_source": wk_result["source"],
+            "detaled_ntroducton": detaled_ntro.strp(),
+            "related_papers": arxv_papers,
+            "papers_count": len(arxv_papers),
+            "arxv_status": "success" f arxv_error s None else "faled",
+            "arxv_error": arxv_error
+        }
+    }
+
+
+@router.get("/arxv/search")
+async def search_arxv(
+    query: str = Query(..., mn_length=1, descrpton="?),
+    max_results: nt = Query(default=10, ge=1, le=50, descrpton="")
+):
+    """Arxv
+    
+    arxv AP?
+    """
+    papers, error_msg = awat search_arxv_papers(query, max_results=max_results)
+    
+    return {
+        "status": "success" f error_msg s None else "partal",
+        "data": {
+            "query": query,
+            "total": len(papers),
+            "papers": papers,
+            "error": error_msg
+        }
+    }
+
+
+# ==================== AP ====================
+
+class ExpandRequest(BaseModel):
+    """"""
+    node_d: str = Feld(..., descrpton="D")
+    node_label: str = Feld(..., descrpton="")
+    exstng_nodes: Lst[str] = Feld(default=[], descrpton="D")
+    max_new_nodes: nt = Feld(default=10, ge=1, le=20, descrpton="")
+
+
+@router.post("/expand")
+async def expand_node(request: ExpandRequest):
+    """ - 
+    
+    ?
+    1. 
+    2. Wkpeda
+    3. 
+    """
+    prnt(f"[NFO] : {request.node_label} (d={request.node_d})")
+    
+    # Wkpeda?
+    new_nodes = []
+    new_edges = []
+    
+    # 1. Wkpeda
+    parent_wk = awat get_wkpeda_defnton(request.node_label, max_length=500)
+    
+    # 2. 
+    doman_specfc_concepts = {
+        "": [
+            ("", "?, "sub_feld"),
+            ("", "?, "foundaton"),
+            ("", "?, "methodology"),
+        ],
+        "": [
+            ("", "?, "foundaton"),
+            ("", "?, "methodology"),
+            ("?, "", "applcaton"),
+        ],
+        "": [
+            ("", "?, "sub_feld"),
+            ("", "", "methodology"),
+            ("?, "", "applcaton"),
+        ],
+        "": [
+            ("", "?, "sub_feld"),
+            ("", "", "applcaton"),
+            ("", "?, "methodology"),
+        ],
+        "": [
+            ("?, "?, "foundaton"),
+            ("", "", "applcaton"),
+            ("", "?, "methodology"),
+        ],
+        "?: [
+            ("", "", "applcaton"),
+            ("?, "?, "methodology"),
+            ("", "?, "foundaton"),
+        ],
+    }
+    
+    # 
+    f request.node_label n doman_specfc_concepts:
+        related_concepts = doman_specfc_concepts[request.node_label]
+    else:
+        # ?
+        related_concepts = [
+            (f"{request.node_label}", "", "theoretcal_foundaton"),
+            (f"{request.node_label}", "?, "methodology"),
+            (f"{request.node_label}", "", "applcaton"),
+        ]
+    
+    # 3. Wkpeda
+    for , (term, dscplne, relaton_type) n enumerate(related_concepts):
+        node_d = f"{request.node_d}_expand_{}"
+        f node_d not n request.exstng_nodes:
+            # Wkpeda
+            term_wk = awat get_wkpeda_defnton(term, max_length=500)
+            
+            # ?
+            orgnal_term = term
+            f not term_wk["exsts"]:
+                # ?
+                alt_terms = [
+                    term.replace(f"{request.node_label}?, "").replace(f"{request.node_label}", ""),
+                    term.splt("?)[-1] f "? n term else term,
+                ]
+                for alt_term n alt_terms:
+                    f alt_term.strp():
+                        term_wk = awat get_wkpeda_defnton(alt_term.strp(), max_length=500)
+                        f term_wk["exsts"]:
+                            term = alt_term.strp()  # ?
+                            break
+            
+            new_nodes.append({
+                "d": node_d,
+                "label": term f term_wk["exsts"] else orgnal_term,
+                "dscplne": dscplne,
+                "defnton": term_wk["defnton"] f term_wk["exsts"] else f"{orgnal_term}{request.node_label}?,
+                "credblty": 0.90 f term_wk["exsts"] else 0.70,
+                "source": "Wkpeda" f term_wk["exsts"] else "LLM",
+                "wk_url": term_wk.get("url", "")
+            })
+            
+            # ?
+            new_edges.append({
+                "source": request.node_d,
+                "target": node_d,
+                "relaton": relaton_type,
+                "weght": 0.80,
+                "reasonng": f"{term}{request.node_label}{relaton_type}"
+            })
+    
+    return {
+        "status": "success",
+        "data": {
+            "nodes": new_nodes,
+            "edges": new_edges,
+            "parent_d": request.node_d
+        }
+    }
+
+
+# ==================== AAP ====================
+

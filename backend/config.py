@@ -42,8 +42,8 @@ class Settings:
     REDIS_PASSWORD: str = os.getenv("REDIS_PASSWORD", "")
     REDIS_CACHE_TTL: int = int(os.getenv("REDIS_CACHE_TTL", "3600"))
     
-    # Mock模式（开发时使用）
-    MOCK_DB: bool = os.getenv("MOCK_DB", "true").lower() == "true"
+    # Mock模式（数据库Mock，但API仍真实调用）
+    MOCK_DB: bool = os.getenv("MOCK_DB", "false").lower() == "true"
     
     # Agent服务地址
     AGENT_API_URL: str = os.getenv("AGENT_API_URL", "http://localhost:5000")

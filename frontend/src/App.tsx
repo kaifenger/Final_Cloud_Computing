@@ -333,7 +333,9 @@ const App: React.FC = () => {
 
       {loading ? (
         <div className="loading-container">
-          <Spin size="large" tip="正在挖掘跨学科关联..." />
+          <Spin size="large" tip="正在挖掘跨学科关联...">
+            <div style={{ padding: '50px', textAlign: 'center' }}></div>
+          </Spin>
         </div>
       ) : nodes.length > 0 ? (
         <div className="content-section">

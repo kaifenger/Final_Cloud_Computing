@@ -101,6 +101,14 @@ if routes_router:
     app.include_router(routes_router, prefix=getattr(settings, 'API_PREFIX', '/api/v1'))
     print(f"[INFO] 路由已注册到 {getattr(settings, 'API_PREFIX', '/api/v1')}")
 
+# 注册AI问答路由
+try:
+    from api.ai_chat import router as ai_chat_router
+    app.include_router(ai_chat_router, prefix=f"{getattr(settings, 'API_PREFIX', '/api/v1')}/ai", tags=["AI问答"])
+    print(f"[INFO] AI问答路由已注册到 {getattr(settings, 'API_PREFIX', '/api/v1')}/ai")
+except Exception as e:
+    print(f"[WARNING] AI问答路由注册失败: {e}")
+
 # 根路径
 @app.get("/")
 async def root():

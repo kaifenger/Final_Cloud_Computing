@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
-import { Button, Card, Tag, Space, Divider, Progress, Input, message } from 'antd';
-import { ExpandOutlined, SendOutlined } from '@ant-design/icons';
-import { ConceptNode } from '../services/api';
+import React, { useState, useEffect } from 'react';
+import { Button, Card, Tag, Space, Divider, Progress, Input, message, Spin } from 'antd';
+import { ExpandOutlined, SendOutlined, LoadingOutlined } from '@ant-design/icons';
+import { ConceptNode, conceptAPI, ArxivPaper } from '../services/api';
 
 const { TextArea } = Input;
 
@@ -29,6 +29,32 @@ const NodeDetailPanel: React.FC<NodeDetailPanelProps> = ({
   const [aiQuestion, setAiQuestion] = useState('');
   const [aiChatLoading, setAiChatLoading] = useState(false);
   const [chatHistory, setChatHistory] = useState<Array<{role: string; content: string}>>([]);
+  
+  // 相关论文状态
+  const [relatedPapers, setRelatedPapers] = useState<ArxivPaper[]>([]);
+  const [papersLoading, setPapersLoading] = useState(false);
+
+  // 当选中节点变化时，获取相关论文
+  useEffect(() => {
+    const fetchPapers = async () => {
+      if (!selectedNode?.label) return;
+      
+      setPapersLoading(true);
+      try {
+        const response = await conceptAPI.searchArxiv(selectedNode.label, 5);
+        if (response.status === 'success' && response.data.papers) {
+          setRelatedPapers(response.data.papers);
+        }
+      } catch (error) {
+        console.log('获取论文失败:', error);
+        setRelatedPapers([]);
+      } finally {
+        setPapersLoading(false);
+      }
+    };
+    
+    fetchPapers();
+  }, [selectedNode?.label]);
 
   const handleAiChat = async () => {
     if (!aiQuestion.trim()) {
@@ -38,17 +64,33 @@ const NodeDetailPanel: React.FC<NodeDetailPanelProps> = ({
     
     setAiChatLoading(true);
     try {
-      // TODO: 调用AI问答API
-      const newChat = [
-        ...chatHistory, 
-        { role: 'user', content: aiQuestion },
-        { role: 'assistant', content: `关于"${selectedNode.label}"的解答：这是一个示例回答。实际实现时需要调用后端AI问答API。` }
-      ];
-      setChatHistory(newChat);
-      setAiQuestion('');
-      message.success('提问成功');
-    } catch (error) {
-      message.error('AI问答失败');
+      const response = await conceptAPI.aiChat(
+        selectedNode.label,
+        aiQuestion,
+        selectedNode.definition
+      );
+      
+      if (response.status === 'success' && response.data.answer) {
+        const newChat = [
+          ...chatHistory, 
+          { role: 'user', content: aiQuestion },
+          { role: 'assistant', content: response.data.answer }
+        ];
+        setChatHistory(newChat);
+        setAiQuestion('');
+        message.success('AI回答成功');
+      } else {
+        message.error('AI回答失败');
+      }
+    } catch (error: any) {
+      console.error('AI问答失败:', error);
+      if (error.response?.status === 503) {
+        message.error('AI服务暂时不可用');
+      } else if (error.response?.status === 504) {
+        message.error('AI响应超时，请稍后重试');
+      } else {
+        message.error('AI问答失败，请稍后重试');
+      }
     } finally {
       setAiChatLoading(false);
     }
@@ -110,21 +152,21 @@ const NodeDetailPanel: React.FC<NodeDetailPanelProps> = ({
         </Space>
       </div>
 
-      {/* 3. 一句话简介 (GPT生成) */}
+      {/* 3. 一句话简介 (LLM生成) */}
       <div style={{ marginBottom: '18px' }}>
         <div style={{ fontSize: '13px', color: '#999', marginBottom: '8px', fontWeight: '500' }}>
-          💡 一句话简介
+          💡 一句话简介 <Tag color="purple" style={{ fontSize: '10px', marginLeft: '4px' }}>AI生成</Tag>
         </div>
         <div style={{ 
-          background: '#f6f8fa',
+          background: 'linear-gradient(135deg, #f6f8fa 0%, #e8f4fd 100%)',
           padding: '14px',
           borderRadius: '10px',
           fontSize: '14px',
           lineHeight: '1.7',
           color: '#333',
-          border: '1px solid #e8e8e8'
+          border: '1px solid #d4e5f7'
         }}>
-          {truncateDefinition(selectedNode.definition, 200)}
+          {(selectedNode as any).brief_summary || truncateDefinition(selectedNode.definition, 100)}
         </div>
       </div>
 
@@ -192,17 +234,62 @@ const NodeDetailPanel: React.FC<NodeDetailPanelProps> = ({
       {/* 6. 相关文献 (Arxiv) */}
       <div style={{ marginBottom: '18px' }}>
         <div style={{ fontSize: '13px', color: '#999', marginBottom: '8px', fontWeight: '500' }}>
-          📄 相关文献
+          📄 相关文献 <Tag color="orange" style={{ fontSize: '10px', marginLeft: '4px' }}>Arxiv</Tag>
         </div>
         <div style={{ 
           fontSize: '12px', 
           color: '#666',
           background: '#f9f9f9',
-          padding: '10px',
+          padding: '12px',
           borderRadius: '8px',
-          textAlign: 'center'
+          maxHeight: '250px',
+          overflow: 'auto'
         }}>
-          点击下方"节点拓展"后可查看相关学术论文
+          {papersLoading ? (
+            <div style={{ textAlign: 'center', padding: '20px' }}>
+              <Spin indicator={<LoadingOutlined style={{ fontSize: 20 }} spin />} />
+              <div style={{ marginTop: '8px', color: '#999' }}>正在搜索相关论文...</div>
+            </div>
+          ) : relatedPapers.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {relatedPapers.map((paper, index) => (
+                <div 
+                  key={index}
+                  style={{
+                    background: 'white',
+                    padding: '10px',
+                    borderRadius: '6px',
+                    borderLeft: '3px solid #fa8c16'
+                  }}
+                >
+                  <div style={{ fontWeight: 'bold', fontSize: '12px', marginBottom: '4px', color: '#333' }}>
+                    {paper.title}
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px' }}>
+                    👤 {paper.authors.slice(0, 2).join(', ')}{paper.authors.length > 2 ? ' 等' : ''}
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#999', marginBottom: '6px' }}>
+                    📅 {paper.published}
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#555', marginBottom: '6px', lineHeight: '1.5' }}>
+                    {paper.summary.length > 150 ? paper.summary.substring(0, 150) + '...' : paper.summary}
+                  </div>
+                  <a 
+                    href={paper.link} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    style={{ fontSize: '11px', color: '#1890ff' }}
+                  >
+                    🔗 查看论文
+                  </a>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ textAlign: 'center', padding: '15px', color: '#999' }}>
+              暂无相关论文
+            </div>
+          )}
         </div>
       </div>
 
@@ -280,7 +367,7 @@ const NodeDetailPanel: React.FC<NodeDetailPanelProps> = ({
 
       <Divider style={{ margin: '18px 0' }} />
 
-      {/* 8. 节点拓展按钮 */}
+      {/* 8. 节点拓展按钮 - 前端功能：发现该节点的新关联节点 */}
       <Button 
         type="primary" 
         block 
@@ -302,10 +389,22 @@ const NodeDetailPanel: React.FC<NodeDetailPanelProps> = ({
         disabled={expandedNodes.has(selectedNode.id)}
         onClick={onExpand}
       >
-        {expandedNodes.has(selectedNode.id) 
-          ? '✓ 已展开' 
-          : '🔎 节点拓展'}
+        {expandLoading 
+          ? '正在发现关联概念...' 
+          : expandedNodes.has(selectedNode.id) 
+            ? '✓ 已展开' 
+            : '🔎 展开关联节点'}
       </Button>
+      {!expandedNodes.has(selectedNode.id) && (
+        <div style={{ 
+          fontSize: '11px', 
+          color: '#999', 
+          textAlign: 'center', 
+          marginTop: '8px' 
+        }}>
+          点击后将在图谱中展开该节点的相关概念
+        </div>
+      )}
     </Card>
   );
 };

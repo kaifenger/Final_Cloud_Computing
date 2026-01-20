@@ -15,6 +15,7 @@ export interface ConceptNode {
   label: string;
   discipline: string;
   definition: string;
+  brief_summary?: string;  // LLM生成的一句话简介
   credibility: number;
   source?: 'Wikipedia' | 'LLM' | 'Arxiv' | 'Manual';  // 定义来源
   wiki_url?: string;  // 维基百科链接
@@ -189,6 +190,18 @@ export const conceptAPI = {
    */
   getDisciplines: async () => {
     const response = await apiClient.get('/disciplines');
+    return response.data;
+  },
+
+  /**
+   * AI问答接口
+   */
+  aiChat: async (concept: string, question: string, context?: string) => {
+    const response = await apiClient.post('/ai/chat', {
+      concept,
+      question,
+      context
+    });
     return response.data;
   }
 };

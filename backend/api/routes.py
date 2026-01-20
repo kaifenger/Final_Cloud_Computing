@@ -1,4 +1,4 @@
-"""API路由定义"""
+﻿"""API路由定义"""
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
@@ -10,17 +10,130 @@ import os
 import wikipedia
 from pathlib import Path
 from dotenv import load_dotenv
+from openai import AsyncOpenAI
 
 # 加载环境变量
 env_path = Path(__file__).parent.parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
+# ==================== LLM客户�?====================
+_llm_client = None
+
+def get_llm_client():
+    """获取LLM客户端单�?""
+    global _llm_client
+    if _llm_client is None:
+        api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
+        if api_key:
+            _llm_client = AsyncOpenAI(
+                api_key=api_key,
+                base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+            )
+            print("[INFO] LLM客户端已初始�?)
+    return _llm_client
+
+
+async def translate_to_english(chinese_text: str) -> str:
+    """
+    使用LLM将中文学术术语翻译成英文
+    
+    Args:
+        chinese_text: 中文文本
+        
+    Returns:
+        英文翻译
+    """
+    client = get_llm_client()
+    if not client:
+        return chinese_text
+    
+    try:
+        response = await asyncio.wait_for(
+            client.chat.completions.create(
+                model=os.getenv("LLM_MODEL", "google/gemini-2.0-flash-001"),
+                messages=[
+                    {"role": "system", "content": "你是一个专业的学术翻译助手，擅长将中文学术术语翻译成精准的英文�?},
+                    {"role": "user", "content": f"将以下中文学术术语翻译成英文（只输出英文，不要解释）：{chinese_text}"}
+                ],
+                temperature=0.1,
+                max_tokens=50
+            ),
+            timeout=10.0
+        )
+        
+        if response and response.choices:
+            translation = response.choices[0].message.content.strip().strip('"\'""''')
+            print(f"[SUCCESS] 翻译: {chinese_text} -> {translation}")
+            return translation
+    except Exception as e:
+        print(f"[WARNING] 翻译失败: {chinese_text}, {str(e)}")
+    
+    return chinese_text
+
+
+async def generate_brief_summary(concept: str, wiki_definition: str = "") -> str:
+    """
+    使用LLM生成一句话简�?
+    
+    Args:
+        concept: 概念名称
+        wiki_definition: 维基百科定义（作为参考）
+        
+    Returns:
+        一句话简介（30-80字）
+    """
+    client = get_llm_client()
+    if not client:
+        # 无LLM时回退到截断维基定�?
+        if wiki_definition:
+            return wiki_definition[:100] + "..." if len(wiki_definition) > 100 else wiki_definition
+        return f"{concept}是一个重要的跨学科概念�?
+    
+    try:
+        prompt = f"""请为概念"{concept}"生成一句话简介（30-80字），要求：
+1. 简洁精准，突出核心特征
+2. 通俗易懂，适合普通读�?
+3. 不要使用"是指"�?是一�?等开�?
+
+{f'参考定义：{wiki_definition[:200]}' if wiki_definition else ''}
+
+直接输出简介内容，不要任何解释或标点外的其他内容�?""
+
+        response = await asyncio.wait_for(
+            client.chat.completions.create(
+                model=os.getenv("LLM_MODEL", "google/gemini-2.0-flash-001"),
+                messages=[
+                    {"role": "system", "content": "你是一个专业的学术概念总结助手，擅长用简洁的语言概括复杂概念�?},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=150
+            ),
+            timeout=15.0
+        )
+        
+        if response and response.choices:
+            summary = response.choices[0].message.content.strip()
+            # 清理可能的引�?
+            summary = summary.strip('"\'""''')
+            print(f"[SUCCESS] LLM生成简�? {concept} -> {summary[:50]}...")
+            return summary
+    except asyncio.TimeoutError:
+        print(f"[WARNING] LLM生成简介超�? {concept}")
+    except Exception as e:
+        print(f"[WARNING] LLM生成简介失�? {concept}, {str(e)}")
+    
+    # 回退逻辑
+    if wiki_definition:
+        return wiki_definition[:100] + "..." if len(wiki_definition) > 100 else wiki_definition
+    return f"{concept}是一个重要的跨学科概念�?
+
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-# 是否启用外部验证（从环境变量读取）
+# 是否启用外部验证（从环境变量读取�?
 ENABLE_EXTERNAL_VERIFICATION = os.getenv("ENABLE_EXTERNAL_VERIFICATION", "false").lower() == "true"
-print(f"[INFO] 外部验证状态: {'启用' if ENABLE_EXTERNAL_VERIFICATION else '禁用'}")
+print(f"[INFO] 外部验证状�? {'启用' if ENABLE_EXTERNAL_VERIFICATION else '禁用'}")
 
 try:
     from database.neo4j_client import neo4j_client
@@ -54,23 +167,27 @@ router = APIRouter()
 
 async def get_wikipedia_definition(concept: str, max_length: int = 500) -> Dict[str, Any]:
     """
-    从维基百科获取概念的权威定义
+    从维基百科获取概念的权威定义（使用wikipedia包）
+    
+    API作用�?
+    - 获取概念的百科全书定�?
+    - 为知识图谱节点提供权威内容来�?
+    - 支持中文和英文两种语言查询
     
     Args:
         concept: 概念名称
-        max_length: 最大定义长度
+        max_length: 最大定义长�?
         
     Returns:
         {
             "definition": str,  # 维基百科定义
             "exists": bool,     # 是否找到
             "url": str,         # 维基百科链接
-            "source": str       # 来源语言
+            "source": str       # 来源
         }
     """
     # 如果禁用外部验证，直接返回空结果
     if not ENABLE_EXTERNAL_VERIFICATION:
-        # print(f"[SKIP] Wikipedia查询已禁用: {concept}")  # 调试用
         return {
             "definition": "",
             "exists": False,
@@ -78,64 +195,74 @@ async def get_wikipedia_definition(concept: str, max_length: int = 500) -> Dict[
             "source": "LLM"
         }
     
-    print(f"[WARNING] Wikipedia查询仍然启用! ENABLE_EXTERNAL_VERIFICATION={ENABLE_EXTERNAL_VERIFICATION}")
+    print(f"[INFO] 正在查询Wikipedia: {concept}")
+    
     loop = asyncio.get_event_loop()
     
-    # 先尝试中文维基百科
+    # 先尝试中文维基百�?
     try:
         wikipedia.set_lang("zh")
-        try:
-            page = await loop.run_in_executor(None, wikipedia.page, concept)
-            summary = page.summary[:max_length] if len(page.summary) > max_length else page.summary
-            return {
-                "definition": summary,
-                "exists": True,
-                "url": page.url,
-                "source": "Wikipedia"
-            }
-        except wikipedia.exceptions.DisambiguationError as e:
-            # 歧义页面，选择第一个
-            if e.options:
+        page = await loop.run_in_executor(None, wikipedia.page, concept)
+        summary = page.summary[:max_length] if len(page.summary) > max_length else page.summary
+        print(f"[SUCCESS] 中文Wikipedia找到: {concept}")
+        return {
+            "definition": summary,
+            "exists": True,
+            "url": page.url,
+            "source": "Wikipedia"
+        }
+    except wikipedia.exceptions.DisambiguationError as e:
+        # 歧义页面，选择第一个选项
+        if e.options:
+            try:
                 page = await loop.run_in_executor(None, wikipedia.page, e.options[0])
                 summary = page.summary[:max_length] if len(page.summary) > max_length else page.summary
+                print(f"[SUCCESS] 中文Wikipedia找到(歧义): {concept} -> {e.options[0]}")
                 return {
                     "definition": summary,
                     "exists": True,
                     "url": page.url,
                     "source": "Wikipedia"
                 }
-        except wikipedia.exceptions.PageError:
-            pass
+            except Exception:
+                pass
+    except wikipedia.exceptions.PageError:
+        pass
     except Exception as e:
-        print(f"[WARNING] 中文Wikipedia搜索失败: {e}")
+        print(f"[WARNING] 中文Wikipedia查询失败: {e}")
     
-    # 再尝试英文维基百科
+    # 再尝试英文维基百�?
     try:
         wikipedia.set_lang("en")
-        try:
-            page = await loop.run_in_executor(None, wikipedia.page, concept)
-            summary = page.summary[:max_length] if len(page.summary) > max_length else page.summary
-            return {
-                "definition": summary,
-                "exists": True,
-                "url": page.url,
-                "source": "Wikipedia"
-            }
-        except wikipedia.exceptions.DisambiguationError as e:
-            if e.options:
+        page = await loop.run_in_executor(None, wikipedia.page, concept)
+        summary = page.summary[:max_length] if len(page.summary) > max_length else page.summary
+        print(f"[SUCCESS] 英文Wikipedia找到: {concept}")
+        return {
+            "definition": summary,
+            "exists": True,
+            "url": page.url,
+            "source": "Wikipedia"
+        }
+    except wikipedia.exceptions.DisambiguationError as e:
+        if e.options:
+            try:
                 page = await loop.run_in_executor(None, wikipedia.page, e.options[0])
                 summary = page.summary[:max_length] if len(page.summary) > max_length else page.summary
+                print(f"[SUCCESS] 英文Wikipedia找到(歧义): {concept} -> {e.options[0]}")
                 return {
                     "definition": summary,
                     "exists": True,
                     "url": page.url,
                     "source": "Wikipedia"
                 }
-        except wikipedia.exceptions.PageError:
-            pass
+            except Exception:
+                pass
+    except wikipedia.exceptions.PageError:
+        pass
     except Exception as e:
-        print(f"[WARNING] 英文Wikipedia搜索失败: {e}")
+        print(f"[WARNING] 英文Wikipedia查询失败: {e}")
     
+    print(f"[WARNING] Wikipedia未找�? {concept}")
     return {
         "definition": "",
         "exists": False,
@@ -149,15 +276,21 @@ async def search_arxiv_papers(query: str, max_results: int = 5) -> tuple[List[Di
     在Arxiv搜索相关论文
     
     Args:
-        query: 搜索关键词
+        query: 搜索关键�?
         max_results: 最大结果数
         
     Returns:
-        (论文列表, 错误信息) - 如果成功error_msg为None，失败返回错误描述
+        (论文列表, 错误信息) - 如果成功error_msg为None，失败返回错误描�?
     """
     # 如果禁用外部验证，直接返回空列表
     if not ENABLE_EXTERNAL_VERIFICATION:
-        return [], "Arxiv查询已禁用"
+        return [], "Arxiv查询已禁�?
+    
+    # 检测是否为中文，如果是则翻译成英文
+    if any('\u4e00' <= char <= '\u9fff' for char in query):
+        print(f"[INFO] 检测到中文查询，正在翻�? {query}")
+        query = await translate_to_english(query)
+        print(f"[INFO] 翻译后查�? {query}")
     
     print(f"[INFO] 正在查询Arxiv论文: {query}")
     import xml.etree.ElementTree as ET
@@ -202,13 +335,13 @@ async def search_arxiv_papers(query: str, max_results: int = 5) -> tuple[List[Di
                 
                 papers.append({
                     "title": title.text.strip() if title is not None else "",
-                    "authors": authors[:3],  # 最多3个作者
+                    "authors": authors[:3],  # 最�?个作�?
                     "summary": (summary.text.strip()[:200] + "...") if summary is not None and len(summary.text.strip()) > 200 else (summary.text.strip() if summary is not None else ""),
                     "link": link.text.strip() if link is not None else "",
                     "published": published.text.strip()[:10] if published is not None else ""
                 })
             
-            print(f"[SUCCESS] Arxiv查询成功，找到{len(papers)}篇论文")
+            print(f"[SUCCESS] Arxiv查询成功，找到{len(papers)}篇论�?)
             return papers, None
     except httpx.TimeoutException:
         error_msg = "Arxiv API请求超时，可能是网络问题"
@@ -227,7 +360,7 @@ async def search_arxiv_papers(query: str, max_results: int = 5) -> tuple[List[Di
 # ==================== Mock数据生成函数 ====================
 
 def truncate_definition(text: str, max_length: int = 500) -> str:
-    """截断定义文本到指定长度"""
+    """截断定义文本到指定长�?""
     if not text:
         return ""
     if len(text) <= max_length:
@@ -238,20 +371,20 @@ def truncate_definition(text: str, max_length: int = 500) -> str:
 async def get_mock_discovery_result(concept: str) -> dict:
     """生成概念挖掘结果（优先使用维基百科定义）"""
     
-    # 预定义概念映射（学科分类）
+    # 预定义概念映射（学科分类�?
     concept_disciplines = {
-        "熵": [
-            {"label": "熵", "discipline": "热力学", "eng_name": "entropy thermodynamics"},
-            {"label": "信息熵", "discipline": "信息论", "eng_name": "information entropy"},
-            {"label": "统计熵", "discipline": "统计力学", "eng_name": "statistical entropy"},
-            {"label": "香农熵", "discipline": "信息论", "eng_name": "Shannon entropy"},
-            {"label": "玻尔兹曼熵", "discipline": "物理学", "eng_name": "Boltzmann entropy"},
+        "�?: [
+            {"label": "�?, "discipline": "热力�?, "eng_name": "entropy thermodynamics"},
+            {"label": "信息�?, "discipline": "信息�?, "eng_name": "information entropy"},
+            {"label": "统计�?, "discipline": "统计力学", "eng_name": "statistical entropy"},
+            {"label": "香农�?, "discipline": "信息�?, "eng_name": "Shannon entropy"},
+            {"label": "玻尔兹曼�?, "discipline": "物理�?, "eng_name": "Boltzmann entropy"},
             {"label": "最大熵原理", "discipline": "数学", "eng_name": "maximum entropy principle"},
         ],
         "神经网络": [
-            {"label": "神经网络", "discipline": "计算机科学", "eng_name": "neural network"},
-            {"label": "神经元", "discipline": "生物学", "eng_name": "neuron"},
-            {"label": "激活函数", "discipline": "数学", "eng_name": "activation function"},
+            {"label": "神经网络", "discipline": "计算机科�?, "eng_name": "neural network"},
+            {"label": "神经�?, "discipline": "生物�?, "eng_name": "neuron"},
+            {"label": "激活函�?, "discipline": "数学", "eng_name": "activation function"},
             {"label": "反向传播", "discipline": "机器学习", "eng_name": "backpropagation"},
             {"label": "卷积神经网络", "discipline": "深度学习", "eng_name": "convolutional neural network"},
             {"label": "递归神经网络", "discipline": "深度学习", "eng_name": "recurrent neural network"},
@@ -260,15 +393,15 @@ async def get_mock_discovery_result(concept: str) -> dict:
             {"label": "深度学习", "discipline": "人工智能", "eng_name": "deep learning"},
             {"label": "梯度下降", "discipline": "优化理论", "eng_name": "gradient descent"},
             {"label": "损失函数", "discipline": "数学", "eng_name": "loss function"},
-            {"label": "过拟合", "discipline": "统计学", "eng_name": "overfitting"},
-            {"label": "正则化", "discipline": "机器学习", "eng_name": "regularization"},
-            {"label": "批归一化", "discipline": "深度学习", "eng_name": "batch normalization"},
+            {"label": "过拟�?, "discipline": "统计�?, "eng_name": "overfitting"},
+            {"label": "正则�?, "discipline": "机器学习", "eng_name": "regularization"},
+            {"label": "批归一�?, "discipline": "深度学习", "eng_name": "batch normalization"},
         ],
         "量子计算": [
-            {"label": "量子计算", "discipline": "计算机科学", "eng_name": "quantum computing"},
+            {"label": "量子计算", "discipline": "计算机科�?, "eng_name": "quantum computing"},
             {"label": "量子比特", "discipline": "量子物理", "eng_name": "qubit"},
             {"label": "量子纠缠", "discipline": "量子力学", "eng_name": "quantum entanglement"},
-            {"label": "量子门", "discipline": "量子信息", "eng_name": "quantum gate"},
+            {"label": "量子�?, "discipline": "量子信息", "eng_name": "quantum gate"},
             {"label": "量子算法", "discipline": "算法理论", "eng_name": "quantum algorithm"},
             {"label": "量子退相干", "discipline": "量子物理", "eng_name": "quantum decoherence"},
         ]
@@ -276,17 +409,17 @@ async def get_mock_discovery_result(concept: str) -> dict:
     
     # 通用概念模板
     default_concepts = [
-        {"label": concept, "discipline": "跨学科", "eng_name": concept},
-        {"label": f"{concept}的应用", "discipline": "应用领域", "eng_name": f"{concept} applications"},
+        {"label": concept, "discipline": "跨学�?, "eng_name": concept},
+        {"label": f"{concept}的应�?, "discipline": "应用领域", "eng_name": f"{concept} applications"},
         {"label": f"{concept}的理论基础", "discipline": "理论基础", "eng_name": f"{concept} theory"},
-        {"label": f"{concept}的历史发展", "discipline": "科学史", "eng_name": f"{concept} history"},
-        {"label": f"{concept}的数学模型", "discipline": "数学", "eng_name": f"{concept} mathematical model"},
+        {"label": f"{concept}的历史发�?, "discipline": "科学�?, "eng_name": f"{concept} history"},
+        {"label": f"{concept}的数学模�?, "discipline": "数学", "eng_name": f"{concept} mathematical model"},
     ]
     
     # 选择概念列表
     concept_list = concept_disciplines.get(concept, default_concepts)
     
-    # 并行获取维基百科定义
+    # 并行获取维基百科定义和LLM简�?
     nodes = []
     for idx, c in enumerate(concept_list):
         node_id = f"{c['label'].replace(' ', '_')}_{c['discipline'].replace(' ', '_')}_{idx}"
@@ -298,28 +431,32 @@ async def get_mock_discovery_result(concept: str) -> dict:
         if not wiki_result["exists"] and c.get("eng_name"):
             wiki_result = await get_wikipedia_definition(c['eng_name'], max_length=500)
         
-        # 生成定义
+        # 生成定义和简�?
         if wiki_result["exists"]:
             definition = wiki_result["definition"]
             source = "Wikipedia"
             credibility = 0.95
         else:
-            # 使用备用定义（LLM生成标记）
-            definition = f"关于{c['label']}的基本概念，属于{c['discipline']}领域的核心知识点。"
+            # 使用备用定义（LLM生成标记�?
+            definition = f"关于{c['label']}的基本概念，属于{c['discipline']}领域的核心知识点�?
             source = "LLM"
             credibility = 0.75
+        
+        # 使用LLM生成一句话简�?
+        brief_summary = await generate_brief_summary(c['label'], definition)
         
         nodes.append({
             "id": node_id,
             "label": c['label'],
             "discipline": c['discipline'],
             "definition": truncate_definition(definition, 500),
+            "brief_summary": brief_summary,  # LLM生成的一句话简�?
             "credibility": credibility,
             "source": source,
             "wiki_url": wiki_result.get("url", "")
         })
     
-    # 生成边
+    # 生成�?
     edges = []
     if len(nodes) > 1:
         # 中心节点与其他节点的关系
@@ -334,13 +471,13 @@ async def get_mock_discovery_result(concept: str) -> dict:
                 "reasoning": f"{center_node['label']}与{node['label']}在概念上存在关联"
             }
             edges.append(edge)
-            print(f"[DEBUG] 生成边: {edge['source']} -> {edge['target']}")
+            print(f"[DEBUG] 生成�? {edge['source']} -> {edge['target']}")
     
-    print(f"[DEBUG] 总计生成 {len(nodes)} 个节点, {len(edges)} 条边")
+    print(f"[DEBUG] 总计生成 {len(nodes)} 个节�? {len(edges)} 条边")
     
     # 搜索arxiv论文（容错处理，即使失败也不影响主功能）
     arxiv_papers = []
-    arxiv_error = "Arxiv查询已禁用"
+    arxiv_error = "Arxiv查询已禁�?
     
     # 只有明确启用时才调用，并设置超时
     if ENABLE_EXTERNAL_VERIFICATION:
@@ -348,10 +485,10 @@ async def get_mock_discovery_result(concept: str) -> dict:
             import asyncio
             arxiv_papers, arxiv_error = await asyncio.wait_for(
                 search_arxiv_papers(concept, max_results=5),
-                timeout=5.0  # 5秒超时
+                timeout=5.0  # 5秒超�?
             )
         except asyncio.TimeoutError:
-            print(f"[WARNING] Arxiv搜索超时，跳过")
+            print(f"[WARNING] Arxiv搜索超时，跳�?)
             arxiv_error = "Arxiv搜索超时"
         except Exception as e:
             print(f"[ERROR] Arxiv搜索异常: {str(e)}")
@@ -384,7 +521,7 @@ class DiscoverRequest(BaseModel):
     concept: str = Field(..., min_length=1, max_length=100, description="核心概念")
     disciplines: Optional[List[str]] = Field(
         default=None, 
-        description="学科列表，默认全部学科"
+        description="学科列表，默认全部学�?
     )
     depth: int = Field(default=2, ge=1, le=3, description="挖掘深度")
     max_concepts: int = Field(default=30, ge=10, le=100, description="最大概念数")
@@ -409,14 +546,14 @@ class GraphResponse(BaseModel):
 async def discover_concepts(request: DiscoverRequest):
     """概念挖掘接口 - 调用成员A的Agent服务
     
-    功能：
+    功能�?
     1. 检查Redis缓存
-    2. 调用Agent服务进行概念挖掘（如不可用则使用Mock数据）
+    2. 调用Agent服务进行概念挖掘（如不可用则使用Mock数据�?
     3. 保存结果到Neo4j
     4. 缓存结果到Redis
     """
     
-    # 1. 检查缓存
+    # 1. 检查缓�?
     cache_key = f"discover:{request.concept}:{':'.join(request.disciplines or [])}"
     cached = await redis_client.get(cache_key)
     if cached:
@@ -426,16 +563,16 @@ async def discover_concepts(request: DiscoverRequest):
             data=cached["data"]
         )
     
-    # 2. 调用Agent服务（成员A提供）
+    # 2. 调用Agent服务（成员A提供�?
     agent_url = f"{settings.AGENT_API_URL}/discover"
     request_id = str(uuid.uuid4())
     result = None
     
-    # 直接使用Mock模式（稳定快速，避免LLM超时和Arxiv错误）
+    # 直接使用Mock模式（稳定快速，避免LLM超时和Arxiv错误�?
     print(f"[INFO] 使用Wikipedia+Mock模式返回数据")
     result = await get_mock_discovery_result(request.concept)
     
-    # 以下是真实LLM调用的代码（已禁用，因为会触发大量arxiv调用导致超时）
+    # 以下是真实LLM调用的代码（已禁用，因为会触发大量arxiv调用导致超时�?
     # 如需启用，请取消注释并确保ENABLE_EXTERNAL_VERIFICATION=false
     """
     try:
@@ -464,11 +601,11 @@ async def discover_concepts(request: DiscoverRequest):
             # 保存节点
             for node in nodes:
                 await neo4j_client.create_concept_node(node)
-            # 保存边
+            # 保存�?
             for edge in edges:
                 await neo4j_client.create_concept_edge(edge)
         except Exception as e:
-            # Neo4j保存失败不影响返回结果，只记录错误
+            # Neo4j保存失败不影响返回结果，只记录错�?
             print(f"[WARNING] 保存到Neo4j失败: {e}")
         
         # 4. 缓存结果
@@ -481,11 +618,11 @@ async def discover_concepts(request: DiscoverRequest):
         except Exception as e:
             print(f"[WARNING] 缓存失败: {e}")
     
-    # 返回前输出详细信息
+    # 返回前输出详细信�?
     response_data = result.get("data", {})
-    print(f"[DEBUG] 返回结果: {len(response_data.get('nodes', []))} 个节点, {len(response_data.get('edges', []))} 条边")
+    print(f"[DEBUG] 返回结果: {len(response_data.get('nodes', []))} 个节�? {len(response_data.get('edges', []))} 条边")
     if response_data.get('edges'):
-        print(f"[DEBUG] 边列表: {[(e['source'], e['target']) for e in response_data['edges'][:3]]}...")
+        print(f"[DEBUG] 边列�? {[(e['source'], e['target']) for e in response_data['edges'][:3]]}...")
     
     return DiscoverResponse(
         status=result.get("status", "success"),
@@ -496,13 +633,13 @@ async def discover_concepts(request: DiscoverRequest):
 
 @router.get("/graph/{concept_id}", response_model=GraphResponse)
 async def get_graph(concept_id: str):
-    """查询指定概念的图谱数据
+    """查询指定概念的图谱数�?
     
     Args:
         concept_id: 概念ID
         
     Returns:
-        图谱数据（nodes + edges）
+        图谱数据（nodes + edges�?
     """
     try:
         graph_data = await neo4j_client.query_graph(concept_id)
@@ -519,17 +656,17 @@ async def get_graph(concept_id: str):
 
 @router.get("/concepts/search")
 async def search_concepts(
-    keyword: str = Query(..., min_length=1, description="搜索关键词"),
+    keyword: str = Query(..., min_length=1, description="搜索关键�?),
     limit: int = Query(default=10, ge=1, le=50, description="返回数量")
 ):
     """搜索概念
     
     Args:
-        keyword: 搜索关键词
+        keyword: 搜索关键�?
         limit: 返回数量限制
         
     Returns:
-        匹配的概念列表
+        匹配的概念列�?
     """
     try:
         concepts = await neo4j_client.search_concepts(keyword, limit)
@@ -550,7 +687,7 @@ async def search_concepts(
 
 @router.get("/disciplines")
 async def get_disciplines():
-    """获取所有学科列表"""
+    """获取所有学科列�?""
     try:
         disciplines = await neo4j_client.get_all_disciplines()
         return {
@@ -568,17 +705,17 @@ async def get_disciplines():
 
 
 @router.delete("/cache/clear")
-async def clear_cache(pattern: str = Query(default="*", description="缓存键模式")):
+async def clear_cache(pattern: str = Query(default="*", description="缓存键模�?)):
     """清除缓存
     
     Args:
-        pattern: 缓存键模式，如 "discover:*"
+        pattern: 缓存键模式，�?"discover:*"
     """
     try:
         await redis_client.clear_pattern(pattern)
         return {
             "status": "success",
-            "message": f"已清除匹配 '{pattern}' 的缓存"
+            "message": f"已清除匹�?'{pattern}' 的缓�?
         }
     except Exception as e:
         raise HTTPException(
@@ -611,7 +748,7 @@ async def get_stats():
 async def get_concept_detail(concept_name: str):
     """获取概念的详细介绍（由大模型生成的扩展信息）
     
-    用于"相关概念展开"功能，返回大模型生成的详细概念介绍
+    用于"相关概念展开"功能，返回大模型生成的详细概念介�?
     """
     # 获取维基百科基础定义
     wiki_result = await get_wikipedia_definition(concept_name, max_length=500)
@@ -619,28 +756,28 @@ async def get_concept_detail(concept_name: str):
     # 搜索相关arxiv论文（容错处理）
     arxiv_papers, arxiv_error = await search_arxiv_papers(concept_name, max_results=5)
     
-    # 生成详细介绍（模拟大模型生成）
+    # 生成详细介绍（模拟大模型生成�?
     detailed_intro = f"""
-**{concept_name}** 是一个跨学科的重要概念。
+**{concept_name}** 是一个跨学科的重要概念�?
 
 ### 基本定义
-{wiki_result['definition'] if wiki_result['exists'] else f'{concept_name}是一个涉及多个领域的核心概念。'}
+{wiki_result['definition'] if wiki_result['exists'] else f'{concept_name}是一个涉及多个领域的核心概念�?}
 
 ### 学科关联
-{concept_name}在以下领域有重要应用：
-- **数学领域**：作为理论基础和形式化描述的工具
-- **物理学领域**：用于描述和解释自然现象
-- **计算机科学领域**：在算法设计和系统实现中的应用
+{concept_name}在以下领域有重要应用�?
+- **数学领域**：作为理论基础和形式化描述的工�?
+- **物理学领�?*：用于描述和解释自然现象
+- **计算机科学领�?*：在算法设计和系统实现中的应�?
 - **工程领域**：实际应用和工程实现
 
 ### 发展历程
-该概念经历了从理论提出到实践应用的发展过程，在不同历史时期由不同学者贡献了重要的理论基础。
+该概念经历了从理论提出到实践应用的发展过程，在不同历史时期由不同学者贡献了重要的理论基础�?
 
 ### 核心原理
-{concept_name}的核心在于理解其基本机制和运作原理，这涉及到多学科知识的综合运用。
+{concept_name}的核心在于理解其基本机制和运作原理，这涉及到多学科知识的综合运用�?
 
 ### 实际应用
-在实际应用中，{concept_name}被广泛用于解决复杂问题，特别是在跨学科研究和工程实践中发挥着关键作用。
+在实际应用中，{concept_name}被广泛用于解决复杂问题，特别是在跨学科研究和工程实践中发挥着关键作用�?
 """
     
     return {
@@ -661,21 +798,22 @@ async def get_concept_detail(concept_name: str):
 
 @router.get("/arxiv/search")
 async def search_arxiv(
-    query: str = Query(..., min_length=1, description="搜索关键词"),
+    query: str = Query(..., min_length=1, description="搜索关键�?),
     max_results: int = Query(default=10, ge=1, le=50, description="最大结果数")
 ):
     """搜索Arxiv论文
     
-    用于验证arxiv API是否能成功检索给定关键词的相关文献
+    用于验证arxiv API是否能成功检索给定关键词的相关文�?
     """
-    papers = await search_arxiv_papers(query, max_results=max_results)
+    papers, error_msg = await search_arxiv_papers(query, max_results=max_results)
     
     return {
-        "status": "success",
+        "status": "success" if error_msg is None else "partial",
         "data": {
             "query": query,
             "total": len(papers),
-            "papers": papers
+            "papers": papers,
+            "error": error_msg
         }
     }
 
@@ -694,150 +832,114 @@ class ExpandRequest(BaseModel):
 async def expand_node(request: ExpandRequest):
     """展开节点 - 获取相关概念
     
-    功能：
+    功能�?
     1. 基于选中节点发现更多相关概念
     2. 优先使用Wikipedia定义
     3. 返回新的节点和边
     """
     print(f"[INFO] 展开节点: {request.node_label} (id={request.node_id})")
     
-    try:
-        # 尝试使用真实LLM调用
-        from agents.orchestrator import get_orchestrator
-        from dotenv import load_dotenv
-        load_dotenv()
-        
-        orchestrator = get_orchestrator()
-        
-        # 构造现有图谱数据
-        existing_graph = {
-            "nodes": [{"id": nid, "label": ""} for nid in request.existing_nodes],
-            "edges": []
+    # 直接使用智能Wikipedia搜索相关概念（更可靠�?
+    new_nodes = []
+    new_edges = []
+    
+    # 1. 获取父概念的Wikipedia页面
+    parent_wiki = await get_wikipedia_definition(request.node_label, max_length=500)
+    
+    # 2. 预定义领域特定的扩展映射
+    domain_specific_concepts = {
+        "机器学习": [
+            ("深度学习", "计算机科�?, "sub_field"),
+            ("神经网络", "计算机科�?, "foundation"),
+            ("监督学习", "方法�?, "methodology"),
+        ],
+        "量子计算": [
+            ("量子纠缠", "物理�?, "foundation"),
+            ("量子算法", "计算机科�?, "methodology"),
+            ("量子密码�?, "应用领域", "application"),
+        ],
+        "深度学习": [
+            ("卷积神经网络", "计算机科�?, "sub_field"),
+            ("反向传播", "算法", "methodology"),
+            ("计算机视�?, "应用领域", "application"),
+        ],
+        "人工智能": [
+            ("机器学习", "计算机科�?, "sub_field"),
+            ("自然语言处理", "应用领域", "application"),
+            ("专家系统", "方法�?, "methodology"),
+        ],
+        "自然语言处理": [
+            ("词嵌�?, "计算机科�?, "foundation"),
+            ("机器翻译", "应用领域", "application"),
+            ("情感分析", "方法�?, "methodology"),
+        ],
+        "计算机视�?: [
+            ("图像识别", "应用领域", "application"),
+            ("目标检�?, "方法�?, "methodology"),
+            ("卷积神经网络", "计算机科�?, "foundation"),
+        ],
+    }
+    
+    # 使用预定义映射或生成通用概念
+    if request.node_label in domain_specific_concepts:
+        related_concepts = domain_specific_concepts[request.node_label]
+    else:
+        # 通用策略：生成理论、方法、应�?
+        related_concepts = [
+            (f"{request.node_label}理论", "理论基础", "theoretical_foundation"),
+            (f"{request.node_label}方法", "方法�?, "methodology"),
+            (f"{request.node_label}应用", "应用领域", "application"),
+        ]
+    
+    # 3. 为每个相关概念获取Wikipedia定义
+    for i, (term, discipline, relation_type) in enumerate(related_concepts):
+        node_id = f"{request.node_id}_expand_{i}"
+        if node_id not in request.existing_nodes:
+            # 尝试获取Wikipedia定义
+            term_wiki = await get_wikipedia_definition(term, max_length=500)
+            
+            # 如果找不到，尝试搜索更通用的概�?
+            original_term = term
+            if not term_wiki["exists"]:
+                # 尝试去掉修饰�?
+                alt_terms = [
+                    term.replace(f"{request.node_label}�?, "").replace(f"{request.node_label}", ""),
+                    term.split("�?)[-1] if "�? in term else term,
+                ]
+                for alt_term in alt_terms:
+                    if alt_term.strip():
+                        term_wiki = await get_wikipedia_definition(alt_term.strip(), max_length=500)
+                        if term_wiki["exists"]:
+                            term = alt_term.strip()  # 使用找到定义的术�?
+                            break
+            
+            new_nodes.append({
+                "id": node_id,
+                "label": term if term_wiki["exists"] else original_term,
+                "discipline": discipline,
+                "definition": term_wiki["definition"] if term_wiki["exists"] else f"{original_term}是{request.node_label}相关的重要概念�?,
+                "credibility": 0.90 if term_wiki["exists"] else 0.70,
+                "source": "Wikipedia" if term_wiki["exists"] else "LLM",
+                "wiki_url": term_wiki.get("url", "")
+            })
+            
+            # 创建结构化的边关�?
+            new_edges.append({
+                "source": request.node_id,
+                "target": node_id,
+                "relation": relation_type,
+                "weight": 0.80,
+                "reasoning": f"{term}是{request.node_label}的{relation_type}"
+            })
+    
+    return {
+        "status": "success",
+        "data": {
+            "nodes": new_nodes,
+            "edges": new_edges,
+            "parent_id": request.node_id
         }
-        
-        expanded = await orchestrator.expand(
-            node_id=request.node_id,
-            existing_graph=existing_graph,
-            max_new_nodes=request.max_new_nodes
-        )
-        
-        # 为新节点添加Wikipedia定义
-        new_nodes = expanded.get("new_nodes", [])
-        for node in new_nodes:
-            if node.get("source") != "Wikipedia":
-                wiki_result = await get_wikipedia_definition(node.get("label", ""), max_length=500)
-                if wiki_result["exists"]:
-                    node["definition"] = wiki_result["definition"]
-                    node["source"] = "Wikipedia"
-                    node["wiki_url"] = wiki_result["url"]
-        
-        return {
-            "status": "success",
-            "data": {
-                "nodes": new_nodes,
-                "edges": expanded.get("new_edges", []),
-                "parent_id": request.node_id
-            }
-        }
-        
-    except Exception as e:
-        print(f"[WARNING] 展开失败，使用智能Wikipedia搜索: {str(e)}")
-        
-        # 回退：使用智能Wikipedia搜索相关概念
-        # 策略：基于父概念在Wikipedia中查找真实相关概念
-        
-        new_nodes = []
-        new_edges = []
-        
-        # 1. 获取父概念的Wikipedia页面
-        parent_wiki = await get_wikipedia_definition(request.node_label, max_length=500)
-        
-        # 2. 生成结构化的相关概念（按学科和关系类型）
-        # 根据父概念类型智能生成相关概念（更具体的策略）
-        
-        # 根据概念名称特征选择策略
-        label = request.node_label.lower()
-        
-        # 预定义领域特定的扩展映射
-        domain_specific_concepts = {
-            "机器学习": [
-                ("深度学习", "计算机科学", "sub_field"),
-                ("神经网络", "计算机科学", "foundation"),
-                ("监督学习", "方法论", "methodology"),
-            ],
-            "量子计算": [
-                ("量子纠缠", "物理学", "foundation"),
-                ("量子算法", "计算机科学", "methodology"),
-                ("量子密码学", "应用领域", "application"),
-            ],
-            "深度学习": [
-                ("卷积神经网络", "计算机科学", "sub_field"),
-                ("反向传播", "算法", "methodology"),
-                ("计算机视觉", "应用领域", "application"),
-            ],
-            "人工智能": [
-                ("机器学习", "计算机科学", "sub_field"),
-                ("自然语言处理", "应用领域", "application"),
-                ("专家系统", "方法论", "methodology"),
-            ],
-        }
-        
-        # 使用预定义映射或生成通用概念
-        if request.node_label in domain_specific_concepts:
-            related_concepts = domain_specific_concepts[request.node_label]
-        else:
-            # 通用策略：生成理论、方法、应用
-            related_concepts = [
-                (f"{request.node_label}理论", "理论基础", "theoretical_foundation"),
-                (f"{request.node_label}方法", "方法论", "methodology"),
-                (f"{request.node_label}应用", "应用领域", "application"),
-            ]
-        
-        # 3. 为每个相关概念获取Wikipedia定义
-        for i, (term, discipline, relation_type) in enumerate(related_concepts):
-            node_id = f"{request.node_id}_expand_{i}"
-            if node_id not in request.existing_nodes:
-                # 尝试获取Wikipedia定义
-                term_wiki = await get_wikipedia_definition(term, max_length=500)
-                
-                # 如果找不到，尝试搜索更通用的概念
-                if not term_wiki["exists"]:
-                    # 尝试去掉修饰词
-                    alt_terms = [
-                        term.replace(f"{request.node_label}的", "").replace(f"{request.node_label}", ""),
-                        term.split("的")[-1] if "的" in term else term,
-                    ]
-                    for alt_term in alt_terms:
-                        if alt_term.strip():
-                            term_wiki = await get_wikipedia_definition(alt_term.strip(), max_length=500)
-                            if term_wiki["exists"]:
-                                term = alt_term.strip()  # 使用找到定义的术语
-                                break
-                
-                new_nodes.append({
-                    "id": node_id,
-                    "label": term,
-                    "discipline": discipline,
-                    "definition": term_wiki["definition"] if term_wiki["exists"] else f"{term}是{request.node_label}相关的重要概念。",
-                    "credibility": 0.90 if term_wiki["exists"] else 0.70,
-                    "source": "Wikipedia" if term_wiki["exists"] else "LLM",
-                    "wiki_url": term_wiki.get("url", "")
-                })
-                
-                # 创建结构化的边关系
-                new_edges.append({
-                    "source": request.node_id,
-                    "target": node_id,
-                    "relation": relation_type,
-                    "weight": 0.80,
-                    "reasoning": f"{term}是{request.node_label}的{relation_type}"
-                })
-        
-        return {
-            "status": "success",
-            "data": {
-                "nodes": new_nodes,
-                "edges": new_edges,
-                "parent_id": request.node_id
-            }
-        }
+    }
+
+
+# ==================== AI�ʴ�API ====================
