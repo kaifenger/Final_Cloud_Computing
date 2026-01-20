@@ -27,9 +27,10 @@ except ImportError:
 
 # 优先使用backend/api/routes（包含Wikipedia支持）
 try:
-    # 直接导入backend目录下的routes
+    # 使用动态路径导入backend目录下的routes
     import importlib.util
-    spec = importlib.util.spec_from_file_location("backend_routes", "D:/yunjisuanfinal/backend/api/routes.py")
+    routes_path = Path(__file__).parent / "api" / "routes.py"
+    spec = importlib.util.spec_from_file_location("backend_routes", str(routes_path))
     backend_routes_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(backend_routes_module)
     routes_router = backend_routes_module.router

@@ -13,6 +13,12 @@ pymilvus==2.3.4
 httpx==0.26.0
 aiohttp==3.9.1
 
+# Wikipedia API
+wikipedia==1.4.0
+
+# Arxiv API
+arxiv==2.1.0
+
 # WebSocket
 websockets==12.0
 python-socketio==5.10.0

@@ -18,6 +18,8 @@ export interface ConceptNode {
   credibility: number;
   source?: 'Wikipedia' | 'LLM' | 'Arxiv' | 'Manual';  // 定义来源
   wiki_url?: string;  // 维基百科链接
+  depth?: number;  // 节点深度（距离根节点的层级）
+  parentId?: string;  // 父节点ID
 }
 
 export interface ConceptEdge {

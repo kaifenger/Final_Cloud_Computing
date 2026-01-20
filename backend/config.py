@@ -1,6 +1,12 @@
 """配置文件"""
 import os
 from typing import List
+from pathlib import Path
+from dotenv import load_dotenv
+
+# 加载项目根目录的.env文件
+env_path = Path(__file__).parent.parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
 
 class Settings:

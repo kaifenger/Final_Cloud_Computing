@@ -32,14 +32,37 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
       .domain(['数学', '物理', '化学', '生物', '计算机', '社会学'])
       .range(['#FF6B6B', '#4ECDC4', '#95E1D3', '#F38181', '#AA96DA', '#FCBAD3']);
 
-    // 力导向图模拟
+    // 识别根节点（depth=0的节点，通常是第一个节点）
+    const rootNode = nodes.find((n: any) => n.depth === 0) || nodes[0];
+    
+    console.log('[Graph] 根节点:', rootNode.id, rootNode.label);
+    console.log('[Graph] 总节点数:', nodes.length);
+    console.log('[Graph] 总边数:', edges.length);
+    console.log('[Graph] 边列表:', edges.map((e: any) => `${e.source} -> ${e.target}`));
+    
+    // 为每个节点计算目标半径（根据深度）
+    const getTargetRadius = (node: any) => {
+      const depth = node.depth || (node.id === rootNode.id ? 0 : 1);
+      if (depth === 0) return 0; // 根节点在中心
+      return 150 * depth; // 每一层距离中心150px
+    };
+
+    // 力导向图模拟 - 使用径向布局
     const simulation = d3.forceSimulation(nodes as any)
       .force('link', d3.forceLink(edges)
         .id((d: any) => d.id)
-        .distance(100))
-      .force('charge', d3.forceManyBody().strength(-300))
+        .distance((d: any) => {
+          // 根据层级调整边长度
+          const sourceDepth = (d.source as any).depth || 0;
+          const targetDepth = (d.target as any).depth || 0;
+          return 100 + Math.abs(targetDepth - sourceDepth) * 50;
+        })
+        .strength(1.2))
+      .force('charge', d3.forceManyBody().strength(-400))
       .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collision', d3.forceCollide().radius(30));
+      .force('collision', d3.forceCollide().radius(40))
+      // 径向力：将节点推向各自层级的圆环上
+      .force('radial', d3.forceRadial((d: any) => getTargetRadius(d), width / 2, height / 2).strength(0.8));
 
     // 添加缩放和拖拽支持
     const g = svg.append('g');
@@ -76,9 +99,15 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
         .on('drag', dragged)
         .on('end', dragEnded));
 
-    // 绘制节点圆圈（增强动画和交互效果）
+    // 绘制节点圆圈（增强动画和交互效果，根据深度调整大小）
     nodeGroup.append('circle')
-      .attr('r', (d) => d.credibility ? 10 + d.credibility * 8 : 15)
+      .attr('r', (d: any) => {
+        // 根据深度计算节点大小：深度越深，节点越小
+        const depth = d.depth || 0;
+        const baseSize = depth === 0 ? 25 : (depth === 1 ? 18 : 12);  // 根节点25，一级子节点18，二级+12
+        const credibilityBonus = d.credibility ? d.credibility * 5 : 0;
+        return baseSize + credibilityBonus;
+      })
       .attr('fill', (d) => colorScale(d.discipline))
       .attr('stroke', '#fff')
       .attr('stroke-width', 2)
@@ -91,25 +120,33 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
         d3.select((this as any).parentNode).classed('selected', true);
         if (onNodeClick) onNodeClick(d);
       })
-      .on('mouseenter', function(_event, d) {
+      .on('mouseenter', function(_event, d: any) {
         const element = d3.select(this);
         element.interrupt(); // 中断之前的动画
+        const depth = d.depth || 0;
+        const baseSize = depth === 0 ? 25 : (depth === 1 ? 18 : 12);
+        const credibilityBonus = d.credibility ? d.credibility * 5 : 0;
+        const currentRadius = baseSize + credibilityBonus;
         element
           .transition()
           .duration(200)
-          .attr('r', (d.credibility ? 10 + d.credibility * 8 : 15) * 1.3)
+          .attr('r', currentRadius * 1.3)
           .attr('stroke-width', 4)
           .style('filter', 'drop-shadow(0 8px 16px rgba(102, 126, 234, 0.5))');
       })
-      .on('mouseleave', function(_event, d) {
+      .on('mouseleave', function(_event, d: any) {
         const isSelected = d3.select((this as any).parentNode).classed('selected');
         if (!isSelected) {
           const element = d3.select(this);
           element.interrupt(); // 中断之前的动画
+          const depth = d.depth || 0;
+          const baseSize = depth === 0 ? 25 : (depth === 1 ? 18 : 12);
+          const credibilityBonus = d.credibility ? d.credibility * 5 : 0;
+          const currentRadius = baseSize + credibilityBonus;
           element
             .transition()
             .duration(200)
-            .attr('r', d.credibility ? 10 + d.credibility * 8 : 15)
+            .attr('r', currentRadius)
             .attr('stroke-width', 2)
             .style('filter', 'drop-shadow(0 4px 8px rgba(0, 0, 0, 0.2))');
         }

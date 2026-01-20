@@ -6,11 +6,21 @@ import httpx
 import uuid
 import sys
 import asyncio
+import os
 import wikipedia
 from pathlib import Path
+from dotenv import load_dotenv
+
+# 加载环境变量
+env_path = Path(__file__).parent.parent.parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+# 是否启用外部验证（从环境变量读取）
+ENABLE_EXTERNAL_VERIFICATION = os.getenv("ENABLE_EXTERNAL_VERIFICATION", "false").lower() == "true"
+print(f"[INFO] 外部验证状态: {'启用' if ENABLE_EXTERNAL_VERIFICATION else '禁用'}")
 
 try:
     from database.neo4j_client import neo4j_client
@@ -58,6 +68,17 @@ async def get_wikipedia_definition(concept: str, max_length: int = 500) -> Dict[
             "source": str       # 来源语言
         }
     """
+    # 如果禁用外部验证，直接返回空结果
+    if not ENABLE_EXTERNAL_VERIFICATION:
+        # print(f"[SKIP] Wikipedia查询已禁用: {concept}")  # 调试用
+        return {
+            "definition": "",
+            "exists": False,
+            "url": "",
+            "source": "LLM"
+        }
+    
+    print(f"[WARNING] Wikipedia查询仍然启用! ENABLE_EXTERNAL_VERIFICATION={ENABLE_EXTERNAL_VERIFICATION}")
     loop = asyncio.get_event_loop()
     
     # 先尝试中文维基百科
@@ -123,7 +144,7 @@ async def get_wikipedia_definition(concept: str, max_length: int = 500) -> Dict[
     }
 
 
-async def search_arxiv_papers(query: str, max_results: int = 5) -> List[Dict[str, Any]]:
+async def search_arxiv_papers(query: str, max_results: int = 5) -> tuple[List[Dict[str, Any]], str]:
     """
     在Arxiv搜索相关论文
     
@@ -132,8 +153,13 @@ async def search_arxiv_papers(query: str, max_results: int = 5) -> List[Dict[str
         max_results: 最大结果数
         
     Returns:
-        论文列表
+        (论文列表, 错误信息) - 如果成功error_msg为None，失败返回错误描述
     """
+    # 如果禁用外部验证，直接返回空列表
+    if not ENABLE_EXTERNAL_VERIFICATION:
+        return [], "Arxiv查询已禁用"
+    
+    print(f"[INFO] 正在查询Arxiv论文: {query}")
     import xml.etree.ElementTree as ET
     
     # 使用HTTPS URL
@@ -147,11 +173,12 @@ async def search_arxiv_papers(query: str, max_results: int = 5) -> List[Dict[str
     }
     
     try:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
             response = await client.get(arxiv_url, params=params)
             if response.status_code != 200:
-                print(f"[WARNING] Arxiv API返回状态码: {response.status_code}")
-                return []
+                error_msg = f"Arxiv API返回状态码 {response.status_code}"
+                print(f"[WARNING] {error_msg}")
+                return [], error_msg
             
             # 解析XML
             root = ET.fromstring(response.text)
@@ -181,10 +208,20 @@ async def search_arxiv_papers(query: str, max_results: int = 5) -> List[Dict[str
                     "published": published.text.strip()[:10] if published is not None else ""
                 })
             
-            return papers
+            print(f"[SUCCESS] Arxiv查询成功，找到{len(papers)}篇论文")
+            return papers, None
+    except httpx.TimeoutException:
+        error_msg = "Arxiv API请求超时，可能是网络问题"
+        print(f"[ERROR] {error_msg}")
+        return [], error_msg
+    except httpx.HTTPError as e:
+        error_msg = f"Arxiv API网络错误: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        return [], error_msg
     except Exception as e:
-        print(f"[WARNING] Arxiv搜索失败: {e}")
-        return []
+        error_msg = f"Arxiv搜索异常: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        return [], error_msg
 
 
 # ==================== Mock数据生成函数 ====================
@@ -287,17 +324,38 @@ async def get_mock_discovery_result(concept: str) -> dict:
     if len(nodes) > 1:
         # 中心节点与其他节点的关系
         center_node = nodes[0]
+        print(f"[DEBUG] 中心节点: {center_node['id']} ({center_node['label']})")
         for i, node in enumerate(nodes[1:], 1):
-            edges.append({
+            edge = {
                 "source": center_node["id"],
                 "target": node["id"],
                 "relation": "related_to",
                 "weight": 0.8 - (i * 0.05),
                 "reasoning": f"{center_node['label']}与{node['label']}在概念上存在关联"
-            })
+            }
+            edges.append(edge)
+            print(f"[DEBUG] 生成边: {edge['source']} -> {edge['target']}")
     
-    # 搜索arxiv论文
-    arxiv_papers = await search_arxiv_papers(concept, max_results=5)
+    print(f"[DEBUG] 总计生成 {len(nodes)} 个节点, {len(edges)} 条边")
+    
+    # 搜索arxiv论文（容错处理，即使失败也不影响主功能）
+    arxiv_papers = []
+    arxiv_error = "Arxiv查询已禁用"
+    
+    # 只有明确启用时才调用，并设置超时
+    if ENABLE_EXTERNAL_VERIFICATION:
+        try:
+            import asyncio
+            arxiv_papers, arxiv_error = await asyncio.wait_for(
+                search_arxiv_papers(concept, max_results=5),
+                timeout=5.0  # 5秒超时
+            )
+        except asyncio.TimeoutError:
+            print(f"[WARNING] Arxiv搜索超时，跳过")
+            arxiv_error = "Arxiv搜索超时"
+        except Exception as e:
+            print(f"[ERROR] Arxiv搜索异常: {str(e)}")
+            arxiv_error = f"Arxiv搜索异常: {str(e)}"
     
     return {
         "status": "success",
@@ -311,7 +369,9 @@ async def get_mock_discovery_result(concept: str) -> dict:
                 "avg_credibility": sum(n["credibility"] for n in nodes) / len(nodes) if nodes else 0,
                 "processing_time": 1.5,
                 "mode": "mock_with_wikipedia",
-                "arxiv_papers": arxiv_papers
+                "arxiv_papers": arxiv_papers,
+                "arxiv_status": "success" if arxiv_error is None else "failed",
+                "arxiv_error": arxiv_error
             }
         }
     }
@@ -371,7 +431,13 @@ async def discover_concepts(request: DiscoverRequest):
     request_id = str(uuid.uuid4())
     result = None
     
-    # 优先尝试直接调用Agent编排器（本地LLM调用）
+    # 直接使用Mock模式（稳定快速，避免LLM超时和Arxiv错误）
+    print(f"[INFO] 使用Wikipedia+Mock模式返回数据")
+    result = await get_mock_discovery_result(request.concept)
+    
+    # 以下是真实LLM调用的代码（已禁用，因为会触发大量arxiv调用导致超时）
+    # 如需启用，请取消注释并确保ENABLE_EXTERNAL_VERIFICATION=false
+    """
     try:
         from agents.orchestrator import get_orchestrator
         from dotenv import load_dotenv
@@ -385,48 +451,9 @@ async def discover_concepts(request: DiscoverRequest):
             disciplines=request.disciplines,
             depth=request.depth,
             max_concepts=request.max_concepts,
-            enable_verification=True
+            enable_verification=False  # 禁用外部验证
         )
-        
-        # 转换响应格式
-        if response_obj.status == "success":
-            result = {
-                "status": "success",
-                "data": {
-                    "nodes": [n.dict() if hasattr(n, 'dict') else n for n in response_obj.data.nodes],
-                    "edges": [e.dict() if hasattr(e, 'dict') else e for e in response_obj.data.edges],
-                    "metadata": response_obj.data.metadata.dict() if hasattr(response_obj.data.metadata, 'dict') else response_obj.data.metadata
-                }
-            }
-            # 为每个节点添加维基百科定义
-            for node in result["data"]["nodes"]:
-                if node.get("source") != "Wikipedia":
-                    wiki_result = await get_wikipedia_definition(node.get("label", ""), max_length=500)
-                    if wiki_result["exists"]:
-                        node["definition"] = wiki_result["definition"]
-                        node["source"] = "Wikipedia"
-                        node["wiki_url"] = wiki_result["url"]
-        else:
-            raise Exception(response_obj.message or "LLM调用失败")
-            
-    except Exception as e:
-        print(f"[WARNING] 本地Agent调用失败: {str(e)}")
-        print(f"[INFO] 回退到外部Agent服务或Mock模式")
-        
-        # 尝试外部Agent服务
-        async with httpx.AsyncClient(timeout=180.0) as client:
-            try:
-                response = await client.post(
-                    agent_url,
-                    json=request.dict()
-                )
-                response.raise_for_status()
-                result = response.json()
-            except Exception as e2:
-                # Agent服务不可用，使用带维基百科的数据
-                print(f"[WARNING] 外部Agent服务不可用: {str(e2)}")
-                print(f"[INFO] 使用Wikipedia+Mock模式返回数据")
-                result = await get_mock_discovery_result(request.concept)
+    """
     
     # 3. 保存到Neo4j
     if result.get("status") == "success":
@@ -453,6 +480,12 @@ async def discover_concepts(request: DiscoverRequest):
             await redis_client.set(cache_key, cache_data, ex=3600)
         except Exception as e:
             print(f"[WARNING] 缓存失败: {e}")
+    
+    # 返回前输出详细信息
+    response_data = result.get("data", {})
+    print(f"[DEBUG] 返回结果: {len(response_data.get('nodes', []))} 个节点, {len(response_data.get('edges', []))} 条边")
+    if response_data.get('edges'):
+        print(f"[DEBUG] 边列表: {[(e['source'], e['target']) for e in response_data['edges'][:3]]}...")
     
     return DiscoverResponse(
         status=result.get("status", "success"),
@@ -583,8 +616,8 @@ async def get_concept_detail(concept_name: str):
     # 获取维基百科基础定义
     wiki_result = await get_wikipedia_definition(concept_name, max_length=500)
     
-    # 搜索相关arxiv论文
-    arxiv_papers = await search_arxiv_papers(concept_name, max_results=5)
+    # 搜索相关arxiv论文（容错处理）
+    arxiv_papers, arxiv_error = await search_arxiv_papers(concept_name, max_results=5)
     
     # 生成详细介绍（模拟大模型生成）
     detailed_intro = f"""
@@ -619,7 +652,9 @@ async def get_concept_detail(concept_name: str):
             "wiki_source": wiki_result["source"],
             "detailed_introduction": detailed_intro.strip(),
             "related_papers": arxiv_papers,
-            "papers_count": len(arxiv_papers)
+            "papers_count": len(arxiv_papers),
+            "arxiv_status": "success" if arxiv_error is None else "failed",
+            "arxiv_error": arxiv_error
         }
     }
 

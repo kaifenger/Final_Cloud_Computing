@@ -1,7 +1,8 @@
 import React, { useState, useCallback } from 'react';
-import { Input, Button, Spin, message, Card, Tag, Space, Tooltip, Modal, Divider } from 'antd';
-import { SearchOutlined, ReloadOutlined, ExpandOutlined, BookOutlined, FileTextOutlined } from '@ant-design/icons';
+import { Input, Button, Spin, message, Card, Tag, Space, Modal, Divider } from 'antd';
+import { SearchOutlined, ReloadOutlined, FileTextOutlined } from '@ant-design/icons';
 import GraphVisualization from './components/GraphVisualization';
+import NodeDetailPanel from './components/NodeDetailPanel';
 import { conceptAPI, ConceptNode, ConceptEdge, ArxivPaper } from './services/api';
 import './App.css';
 
@@ -12,19 +13,10 @@ const truncateDefinition = (text: string, maxLength: number = 500): string => {
   return text.slice(0, maxLength - 3) + '...';
 };
 
-// 来源标签颜色映射
-const sourceColors: Record<string, string> = {
-  'Wikipedia': 'green',
-  'LLM': 'blue',
-  'Arxiv': 'orange',
-  'Manual': 'purple'
-};
-
 const App: React.FC = () => {
   const [concept, setConcept] = useState('');
   const [loading, setLoading] = useState(false);
   const [expandLoading, setExpandLoading] = useState(false);
-  const [detailLoading, setDetailLoading] = useState(false);
   const [nodes, setNodes] = useState<ConceptNode[]>([]);
   const [edges, setEdges] = useState<ConceptEdge[]>([]);
   const [selectedNode, setSelectedNode] = useState<ConceptNode | null>(null);
@@ -53,19 +45,27 @@ const App: React.FC = () => {
       const response = await conceptAPI.discover(concept);
       if (response.status === 'success') {
         // 确保所有节点定义都被截断
-        const processedNodes = response.data.nodes.map(node => ({
+        const processedNodes = response.data.nodes.map((node, index) => ({
           ...node,
-          definition: truncateDefinition(node.definition, 500)
+          definition: truncateDefinition(node.definition, 500),
+          depth: index === 0 ? 0 : 1  // 第一个节点是根节点，深度为0，其他为1
         }));
         
-        // 验证边的有效性（确保source和target都存在）
-        const nodeIds = new Set(processedNodes.map(n => n.id));
-        const validEdges = response.data.edges.filter(edge => 
-          nodeIds.has(edge.source) && nodeIds.has(edge.target)
-        );
+        // 强制重建边：确保所有边都从根节点（第一个节点）出发
+        const rootNode = processedNodes[0];
+        const correctedEdges: ConceptEdge[] = processedNodes.slice(1).map((node, index) => ({
+          source: rootNode.id,
+          target: node.id,
+          relation: 'related_to',
+          weight: 0.8 - (index * 0.05),
+          reasoning: `${rootNode.label}与${node.label}在概念上存在关联`
+        }));
+        
+        console.log('初始搜索 - 节点列表:', processedNodes.map(n => ({ id: n.id, label: n.label, depth: n.depth })));
+        console.log('初始搜索 - 修正后边列表:', correctedEdges.map(e => ({ source: e.source, target: e.target })));
         
         setNodes(processedNodes);
-        setEdges(validEdges);
+        setEdges(correctedEdges);
         
         // 保存arxiv论文信息
         if (response.data.metadata?.arxiv_papers) {
@@ -75,7 +75,7 @@ const App: React.FC = () => {
         }
         
         message.success({
-          content: `发现 ${processedNodes.length} 个相关概念，${validEdges.length} 个关联关系`,
+          content: `发现 ${processedNodes.length} 个相关概念，${correctedEdges.length} 个关联关系`,
           duration: 3,
           icon: '🎉'
         });
@@ -110,7 +110,7 @@ const App: React.FC = () => {
     console.log('点击节点:', node);
   }, []);
 
-  // 展开节点 - 获取相关概念
+  // 展开节点 - 以当前节点为新的搜索词，重新discover
   const handleExpandNode = async () => {
     if (!selectedNode) return;
     
@@ -123,18 +123,26 @@ const App: React.FC = () => {
     setExpandLoading(true);
     
     try {
-      // 传递现有节点ID列表，避免重复
-      const existingNodeIds = nodes.map(n => n.id);
-      const response = await conceptAPI.expandNode(selectedNode.id, selectedNode.label, existingNodeIds);
+      // 以当前节点为新的搜索词，重新discover
+      console.log(`以 "${selectedNode.label}" 为新根节点进行搜索...`);
+      const response = await conceptAPI.discover(selectedNode.label);
       
-      if (response.status === 'success' && response.data.nodes.length > 0) {
-        // 处理新节点，确保定义截断
+      if (response.status === 'success') {
+        // 获取当前节点的深度
+        const currentDepth = selectedNode.depth || 0;
+        
+        // 处理新节点，设置它们的深度为父节点+1
         const newNodes = response.data.nodes
           .map(node => ({
             ...node,
-            definition: truncateDefinition(node.definition, 500)
+            definition: truncateDefinition(node.definition, 500),
+            depth: currentDepth + 1,  // 设置子节点深度
+            parentId: selectedNode.id  // 记录父节点
           }))
-          .filter(newNode => !nodes.some(existing => existing.id === newNode.id));
+          .filter(newNode => 
+            newNode.id !== selectedNode.id && // 排除自身
+            !nodes.some(existing => existing.id === newNode.id) // 排除已存在的
+          );
         
         if (newNodes.length === 0) {
           message.info('没有发现新的相关概念');
@@ -144,43 +152,36 @@ const App: React.FC = () => {
         
         // 合并节点
         const allNodes = [...nodes, ...newNodes];
-        const allNodeIds = new Set(allNodes.map(n => n.id));
         
-        // 创建新的边连接到选中节点
+        // 处理边：将所有新节点连接到当前被展开的节点，形成树状结构
+        // discover返回的第一个节点是新的中心节点，其他节点连接到它
+        // 但我们需要将这些连接改为从selectNode出发
         const newEdges: ConceptEdge[] = newNodes.map(newNode => ({
-          source: selectedNode.id,
-          target: newNode.id,
-          relation: 'related_to',
-          weight: 0.7,
-          reasoning: `从 ${selectedNode.label} 扩展发现`
+          source: selectedNode.id,  // 从当前节点出发
+          target: newNode.id,       // 连接到每个新节点
+          relation: 'expanded_from',
+          weight: 0.8,
+          reasoning: `从 ${selectedNode.label} 展开发现`
         }));
         
-        // 合并边并验证有效性
-        const allEdges = [...edges, ...newEdges, ...response.data.edges]
-          .filter(edge => allNodeIds.has(edge.source) && allNodeIds.has(edge.target))
-          // 去重
-          .filter((edge, index, self) => 
-            index === self.findIndex(e => 
-              e.source === edge.source && e.target === edge.target
-            )
-          );
+        // 合并边
+        const allEdges = [...edges, ...newEdges];
+        
+        console.log('展开节点 - 父节点:', { id: selectedNode.id, label: selectedNode.label, depth: selectedNode.depth });
+        console.log('展开节点 - 新子节点:', newNodes.map(n => ({ id: n.id, label: n.label, depth: n.depth })));
+        console.log('展开节点 - 新边:', newEdges.map(e => ({ source: e.source, target: e.target })));
         
         setNodes(allNodes);
         setEdges(allEdges);
         setExpandedNodes(prev => new Set([...prev, selectedNode.id]));
         
-        message.success({
-          content: `成功展开！新增 ${newNodes.length} 个相关概念`,
-          duration: 3,
-          icon: '✨'
-        });
+        message.success(`展开成功！发现 ${newNodes.length} 个新概念`);
       } else {
-        message.info('未找到更多相关概念');
-        setExpandedNodes(prev => new Set([...prev, selectedNode.id]));
+        message.error('展开失败');
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error('展开失败:', error);
-      message.error('展开概念失败，请稍后重试');
+      message.error('展开失败，请稍后重试');
     } finally {
       setExpandLoading(false);
     }
@@ -194,25 +195,6 @@ const App: React.FC = () => {
     setExpandedNodes(new Set());
     setSearchArxivPapers([]);
     setConceptDetail(null);
-  };
-
-  // 获取概念详细介绍
-  const handleShowDetail = async () => {
-    if (!selectedNode) return;
-    
-    setDetailLoading(true);
-    try {
-      const response = await conceptAPI.getConceptDetail(selectedNode.label);
-      if (response.status === 'success') {
-        setConceptDetail(response.data);
-        setShowDetailModal(true);
-      }
-    } catch (error) {
-      console.error('获取详情失败:', error);
-      message.error('获取概念详情失败');
-    } finally {
-      setDetailLoading(false);
-    }
   };
 
   return (
@@ -365,153 +347,13 @@ const App: React.FC = () => {
           
           {selectedNode && (
             <div className="detail-section">
-              <Card 
-                title={
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontSize: '20px' }}>🔍</span>
-                    <span>节点详情</span>
-                  </span>
-                }
-                size="small"
-                extra={
-                  <Button 
-                    type="text" 
-                    onClick={() => setSelectedNode(null)}
-                    style={{ color: 'white' }}
-                  >
-                    ✕
-                  </Button>
-                }
-              >
-                <div style={{ marginBottom: '16px' }}>
-                  <div style={{ 
-                    fontSize: '18px', 
-                    fontWeight: 'bold',
-                    marginBottom: '8px',
-                    color: '#667eea'
-                  }}>
-                    {selectedNode.label}
-                  </div>
-                  <Space size={4}>
-                    <Tag color="blue" style={{ fontSize: '12px' }}>
-                      {selectedNode.discipline}
-                    </Tag>
-                    {/* 来源标签 */}
-                    <Tooltip title={`定义来源: ${selectedNode.source || 'LLM'}`}>
-                      <Tag 
-                        color={sourceColors[selectedNode.source || 'LLM']} 
-                        style={{ fontSize: '12px' }}
-                      >
-                        {selectedNode.source || 'LLM'}
-                      </Tag>
-                    </Tooltip>
-                    {expandedNodes.has(selectedNode.id) && (
-                      <Tag color="cyan" style={{ fontSize: '12px' }}>已展开</Tag>
-                    )}
-                  </Space>
-                </div>
-                
-                <div style={{ lineHeight: '1.6', marginBottom: '12px' }}>
-                  <strong style={{ color: '#764ba2' }}>📖 定义：</strong>
-                  <br/>
-                  <span style={{ 
-                    color: '#555',
-                    display: 'block',
-                    marginTop: '4px',
-                    maxHeight: '150px',
-                    overflow: 'auto'
-                  }}>
-                    {/* 前端最终截断保障 */}
-                    {truncateDefinition(selectedNode.definition, 500)}
-                  </span>
-                  <div style={{ 
-                    fontSize: '11px', 
-                    color: '#999', 
-                    marginTop: '4px',
-                    fontStyle: 'italic'
-                  }}>
-                    来源: {selectedNode.source || 'AI生成'}
-                  </div>
-                </div>
-                
-                <div>
-                  <strong style={{ color: '#764ba2' }}>📊 可信度：</strong>
-                  <br/>
-                  <div style={{ marginTop: '8px' }}>
-                    <div style={{ 
-                      background: '#f0f0f0',
-                      borderRadius: '10px',
-                      overflow: 'hidden',
-                      height: '20px',
-                      position: 'relative'
-                    }}>
-                      <div style={{ 
-                        background: selectedNode.credibility > 0.7 
-                          ? 'linear-gradient(90deg, #52c41a, #73d13d)'
-                          : selectedNode.credibility > 0.5
-                          ? 'linear-gradient(90deg, #faad14, #ffc53d)'
-                          : 'linear-gradient(90deg, #ff4d4f, #ff7875)',
-                        width: `${selectedNode.credibility * 100}%`,
-                        height: '100%',
-                        transition: 'width 0.5s ease',
-                        borderRadius: '10px'
-                      }}></div>
-                      <span style={{ 
-                        position: 'absolute',
-                        top: '50%',
-                        left: '50%',
-                        transform: 'translate(-50%, -50%)',
-                        fontSize: '12px',
-                        fontWeight: 'bold',
-                        color: '#333'
-                      }}>
-                        {(selectedNode.credibility * 100).toFixed(0)}%
-                      </span>
-                    </div>
-                  </div>
-                </div>
-                
-                <Button 
-                  type="primary" 
-                  block 
-                  icon={<ExpandOutlined />}
-                  style={{ 
-                    marginTop: '16px',
-                    background: expandedNodes.has(selectedNode.id)
-                      ? '#d9d9d9'
-                      : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                    border: 'none',
-                    borderRadius: '8px',
-                    height: '40px',
-                    fontWeight: 'bold'
-                  }}
-                  loading={expandLoading}
-                  disabled={expandedNodes.has(selectedNode.id)}
-                  onClick={handleExpandNode}
-                >
-                  {expandedNodes.has(selectedNode.id) 
-                    ? '✓ 已展开' 
-                    : '🔎 展开相关概念'}
-                </Button>
-                
-                <Button 
-                  type="default" 
-                  block 
-                  icon={<BookOutlined />}
-                  style={{ 
-                    marginTop: '8px',
-                    borderRadius: '8px',
-                    height: '40px',
-                    fontWeight: 'bold',
-                    borderColor: '#667eea',
-                    color: '#667eea'
-                  }}
-                  loading={detailLoading}
-                  onClick={handleShowDetail}
-                >
-                  📚 查看详细概念介绍
-                </Button>
-              </Card>
+              <NodeDetailPanel
+                selectedNode={selectedNode}
+                expandedNodes={expandedNodes}
+                expandLoading={expandLoading}
+                onClose={() => setSelectedNode(null)}
+                onExpand={handleExpandNode}
+              />
             </div>
           )}
         </div>
