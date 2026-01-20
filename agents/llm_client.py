@@ -12,17 +12,17 @@ logger = logging.getLogger(__name__)
 
 
 class LLMClient:
-    """LLM客户端（支持OpenRouter + Gemini 3 Pro）"""
+    """LLM客户端（支持OpenRouter + Gemini）"""
     
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "google/gemini-3-pro-preview",
+        model: str = "google/gemini-2.0-flash-001",  # 使用稳定的flash模型
         temperature: float = 0.3,
         max_tokens: int = 2000,
-        timeout: int = 60,
+        timeout: int = 90,  # 增加超时到90秒
         base_url: Optional[str] = None,
-        enable_reasoning: bool = True
+        enable_reasoning: bool = False  # 默认关闭推理模式以提高稳定性
     ):
         """
         初始化LLM客户端
@@ -40,7 +40,7 @@ class LLMClient:
         if not self.api_key:
             logger.warning("OPENROUTER_API_KEY not set, LLM calls will fail")
         
-        self.model = model or os.getenv("LLM_MODEL", "google/gemini-3-pro-preview")
+        self.model = model or os.getenv("LLM_MODEL", "google/gemini-2.0-flash-001")
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout

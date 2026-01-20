@@ -13,7 +13,7 @@ class Settings:
     
     # 服务器配置
     HOST: str = os.getenv("BACKEND_HOST", "0.0.0.0")
-    PORT: int = int(os.getenv("BACKEND_PORT", "8000"))
+    PORT: int = int(os.getenv("BACKEND_PORT", "8888"))
     API_PREFIX: str = os.getenv("API_PREFIX", "/api/v1")
     
     # CORS配置

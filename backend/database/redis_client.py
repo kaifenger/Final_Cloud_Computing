@@ -115,6 +115,54 @@ class RedisClient:
             return False
         
         return await self.client.exists(key) > 0
+    
+    async def clear_pattern(self, pattern: str = "*"):
+        """清除匹配模式的缓存"""
+        if self.mock_mode:
+            if pattern == "*":
+                self._mock_cache.clear()
+            else:
+                # 简单的模式匹配
+                prefix = pattern.replace("*", "")
+                keys_to_delete = [k for k in self._mock_cache.keys() if k.startswith(prefix)]
+                for key in keys_to_delete:
+                    del self._mock_cache[key]
+            logger.debug(f"[MOCK] CLEAR pattern={pattern}")
+            return True
+        
+        if not self.client:
+            return False
+        
+        cursor = 0
+        while True:
+            cursor, keys = await self.client.scan(cursor, match=pattern, count=100)
+            if keys:
+                await self.client.delete(*keys)
+            if cursor == 0:
+                break
+        return True
+    
+    async def get_stats(self) -> dict:
+        """获取缓存统计信息"""
+        if self.mock_mode:
+            return {
+                "mode": "mock",
+                "keys_count": len(self._mock_cache),
+                "memory_usage": "N/A"
+            }
+        
+        if not self.client:
+            return {"mode": "disconnected"}
+        
+        try:
+            info = await self.client.info("memory")
+            return {
+                "mode": "redis",
+                "memory_usage": info.get("used_memory_human", "N/A"),
+                "keys_count": await self.client.dbsize()
+            }
+        except Exception as e:
+            return {"mode": "error", "error": str(e)}
 
 
 # 全局实例

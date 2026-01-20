@@ -8,26 +8,46 @@ from pathlib import Path
 
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))  # 添加项目根目录
 
+# 分别导入各模块，避免一个失败导致全部失败
 try:
     from config import settings
-    from api import routes
-    from database import neo4j_client, redis_client
 except ImportError:
-    # 如果找不到模块，使用mock对象
     class MockSettings:
         PROJECT_NAME = "ConceptGraph AI"
         VERSION = "1.0.0"
         DEBUG = True
         CORS_ORIGINS = ["http://localhost:3000"]
+        API_PREFIX = "/api/v1"
+        HOST = "0.0.0.0"
+        PORT = 8888
     settings = MockSettings()
-    
+    print("[WARNING] config模块加载失败，使用Mock配置")
+
+# 优先使用backend/api/routes（包含Wikipedia支持）
+try:
+    # 直接导入backend目录下的routes
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("backend_routes", "D:/yunjisuanfinal/backend/api/routes.py")
+    backend_routes_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(backend_routes_module)
+    routes_router = backend_routes_module.router
+    print("[INFO] 使用backend/api/routes（包含Wikipedia支持）")
+except Exception as e:
+    print(f"[WARNING] backend/api/routes加载失败: {e}")
+    routes_router = None
+
+try:
+    from database import neo4j_client, redis_client
+except ImportError:
     class MockClient:
         async def connect(self): pass
         async def disconnect(self): pass
+        async def is_connected(self): return False
     neo4j_client = MockClient()
     redis_client = MockClient()
-    routes = None
+    print("[WARNING] database模块加载失败，使用Mock客户端")
 
 
 @asynccontextmanager
@@ -76,8 +96,9 @@ app.add_middleware(
 )
 
 # 注册路由（如果存在）
-if routes:
-    app.include_router(routes.router, prefix=getattr(settings, 'API_PREFIX', '/api/v1'))
+if routes_router:
+    app.include_router(routes_router, prefix=getattr(settings, 'API_PREFIX', '/api/v1'))
+    print(f"[INFO] 路由已注册到 {getattr(settings, 'API_PREFIX', '/api/v1')}")
 
 # 根路径
 @app.get("/")

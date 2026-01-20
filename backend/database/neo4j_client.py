@@ -141,6 +141,93 @@ class Neo4jClient:
         """
         result = await self.query(cypher, {"concept_id": concept_id})
         return [r["related"] for r in result]
+    
+    async def query_graph(self, concept_id: str) -> Dict[str, Any]:
+        """查询指定概念的图谱数据"""
+        if self.mock_mode:
+            logger.debug(f"[MOCK] 查询图谱: {concept_id}")
+            return {
+                "nodes": [
+                    {
+                        "id": concept_id,
+                        "label": "概念",
+                        "discipline": "跨学科",
+                        "definition": "Mock概念定义",
+                        "credibility": 0.9,
+                        "source": "LLM"
+                    }
+                ],
+                "edges": []
+            }
+        
+        # 查询节点
+        nodes_cypher = """
+        MATCH (c:Concept {id: $concept_id})
+        OPTIONAL MATCH (c)-[r]-(related:Concept)
+        RETURN DISTINCT c, related, r
+        """
+        result = await self.query(nodes_cypher, {"concept_id": concept_id})
+        
+        nodes = {}
+        edges = []
+        
+        for record in result:
+            if record.get("c"):
+                c = record["c"]
+                nodes[c["id"]] = c
+            if record.get("related"):
+                related = record["related"]
+                nodes[related["id"]] = related
+            if record.get("r"):
+                r = record["r"]
+                edges.append({
+                    "source": concept_id,
+                    "target": record["related"]["id"],
+                    "relation": r.get("type", "related_to"),
+                    "weight": r.get("weight", 0.5),
+                    "reasoning": r.get("reasoning", "")
+                })
+        
+        return {
+            "nodes": list(nodes.values()),
+            "edges": edges
+        }
+    
+    async def search_concepts(self, keyword: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """搜索概念"""
+        if self.mock_mode:
+            logger.debug(f"[MOCK] 搜索概念: {keyword}")
+            return [
+                {
+                    "id": f"mock_{keyword}",
+                    "label": keyword,
+                    "discipline": "跨学科",
+                    "definition": f"关于{keyword}的概念",
+                    "credibility": 0.85,
+                    "source": "LLM"
+                }
+            ]
+        
+        cypher = """
+        MATCH (c:Concept)
+        WHERE c.label CONTAINS $keyword OR c.definition CONTAINS $keyword
+        RETURN c
+        LIMIT $limit
+        """
+        result = await self.query(cypher, {"keyword": keyword, "limit": limit})
+        return [r["c"] for r in result]
+    
+    async def get_all_disciplines(self) -> List[str]:
+        """获取所有学科列表"""
+        if self.mock_mode:
+            return ["数学", "物理", "化学", "生物", "计算机科学", "社会学"]
+        
+        cypher = """
+        MATCH (c:Concept)
+        RETURN DISTINCT c.discipline as discipline
+        """
+        result = await self.query(cypher)
+        return [r["discipline"] for r in result if r.get("discipline")]
 
 
 # 全局实例

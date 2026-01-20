@@ -4,7 +4,7 @@ const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8888/api
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 60000,
+  timeout: 180000,  // 180秒超时，支持复杂LLM调用
   headers: {
     'Content-Type': 'application/json',
   },
@@ -16,6 +16,8 @@ export interface ConceptNode {
   discipline: string;
   definition: string;
   credibility: number;
+  source?: 'Wikipedia' | 'LLM' | 'Arxiv' | 'Manual';  // 定义来源
+  wiki_url?: string;  // 维基百科链接
 }
 
 export interface ConceptEdge {
@@ -26,13 +28,29 @@ export interface ConceptEdge {
   reasoning: string;
 }
 
+export interface ArxivPaper {
+  title: string;
+  authors: string[];
+  summary: string;
+  link: string;
+  published: string;
+}
+
 export interface DiscoverResponse {
   status: string;
   request_id: string;
   data: {
     nodes: ConceptNode[];
     edges: ConceptEdge[];
-    metadata: any;
+    metadata: {
+      total_nodes: number;
+      total_edges: number;
+      verified_nodes: number;
+      avg_credibility: number;
+      processing_time: number;
+      mode: string;
+      arxiv_papers?: ArxivPaper[];
+    };
   };
 }
 
@@ -41,6 +59,28 @@ export interface GraphResponse {
   data: {
     nodes: ConceptNode[];
     edges: ConceptEdge[];
+  };
+}
+
+export interface ConceptDetailResponse {
+  status: string;
+  data: {
+    concept: string;
+    wiki_definition: string | null;
+    wiki_url: string | null;
+    wiki_source: string;
+    detailed_introduction: string;
+    related_papers: ArxivPaper[];
+    papers_count: number;
+  };
+}
+
+export interface ArxivSearchResponse {
+  status: string;
+  data: {
+    query: string;
+    total: number;
+    papers: ArxivPaper[];
   };
 }
 
@@ -63,6 +103,72 @@ export const conceptAPI = {
    */
   getGraph: async (conceptId: string) => {
     const response = await apiClient.get<GraphResponse>(`/graph/${conceptId}`);
+    return response.data;
+  },
+
+  /**
+   * 展开节点 - 获取相关概念（使用专用expand端点）
+   */
+  expandNode: async (nodeId: string, nodeName: string, existingNodeIds: string[] = []) => {
+    try {
+      // 优先使用专用expand端点
+      const response = await apiClient.post<{
+        status: string;
+        data: {
+          nodes: ConceptNode[];
+          edges: ConceptEdge[];
+          parent_id: string;
+        };
+      }>('/expand', {
+        node_id: nodeId,
+        node_label: nodeName,
+        existing_nodes: existingNodeIds,
+        max_new_nodes: 10
+      });
+      
+      return {
+        status: response.data.status,
+        request_id: '',
+        data: {
+          nodes: response.data.data.nodes,
+          edges: response.data.data.edges,
+          metadata: {
+            total_nodes: response.data.data.nodes.length,
+            total_edges: response.data.data.edges.length,
+            verified_nodes: 0,
+            avg_credibility: 0,
+            processing_time: 0,
+            mode: 'expand'
+          }
+        }
+      } as DiscoverResponse;
+    } catch (error) {
+      // 回退：使用discover接口
+      console.log('expand端点失败，使用discover接口');
+      const response = await apiClient.post<DiscoverResponse>('/discover', {
+        concept: nodeName,
+        depth: 1,
+        max_concepts: 10
+      });
+      return response.data;
+    }
+  },
+
+  /**
+   * 获取概念详细介绍（大模型生成的扩展信息）
+   */
+  getConceptDetail: async (conceptName: string) => {
+    const response = await apiClient.get<ConceptDetailResponse>(`/concept/${encodeURIComponent(conceptName)}/detail`);
+    return response.data;
+  },
+
+  /**
+   * 搜索Arxiv论文
+   */
+  searchArxiv: async (query: string, maxResults: number = 10) => {
+    const response = await apiClient.get<ArxivSearchResponse>('/arxiv/search', {
+      params: { query, max_results: maxResults }
+    });
     return response.data;
   },
 
