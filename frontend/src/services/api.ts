@@ -53,6 +53,18 @@ export interface DiscoverResponse {
       processing_time: number;
       mode: string;
       arxiv_papers?: ArxivPaper[];
+      bridge_analysis?: {
+        input_concepts: string[];
+        total_bridges: number;
+        bridges_by_type: {
+          [key: string]: {
+            name: string;
+            connected: string[];
+            principle: string;
+          }[];
+        };
+        summary: string;
+      };
     };
   };
 }

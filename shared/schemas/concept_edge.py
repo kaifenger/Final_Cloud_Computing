@@ -26,7 +26,6 @@ class ConceptEdge(BaseModel):
     )
     reasoning: str = Field(
         ..., 
-        max_length=500, 
         description="关联原因"
     )
     

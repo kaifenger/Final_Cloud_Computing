@@ -35,6 +35,7 @@ const App: React.FC = () => {
   const [searchMode, setSearchMode] = useState<'auto' | 'disciplined' | 'bridge'>('auto');
   const [disciplines, setDisciplines] = useState<string[]>([]);
   const [bridgeConcepts, setBridgeConcepts] = useState<string[]>(['', '']);
+  const [bridgeAnalysis, setBridgeAnalysis] = useState<any>(null);  // 桥接路径分析数据
 
   const handleSearch = async () => {
     if (!concept.trim() && searchMode !== 'bridge') {
@@ -80,7 +81,9 @@ const App: React.FC = () => {
         const processedNodes = response.data.nodes.map((node, index) => ({
           ...node,
           definition: truncateDefinition(node.definition, 500),
-          depth: index === 0 ? 0 : 1  // 第一个节点是根节点，深度为0，其他为1
+          // 对于bridge模式，保留后端返回的depth、is_input、is_bridge属性
+          // 对于其他模式，第一个节点是根节点（depth=0），其他为1
+          depth: searchMode === 'bridge' ? node.depth : (index === 0 ? 0 : 1)
         }));
         
         // 使用后端返回的边数据（包含LLM生成的reasoning）
@@ -91,6 +94,13 @@ const App: React.FC = () => {
         
         setNodes(processedNodes);
         setEdges(processedEdges);
+        
+        // 保存桥接路径分析数据（仅bridge模式）
+        if (searchMode === 'bridge' && response.data.metadata?.bridge_analysis) {
+          setBridgeAnalysis(response.data.metadata.bridge_analysis);
+        } else {
+          setBridgeAnalysis(null);
+        }
         
         // 保存arxiv论文信息
         if (response.data.metadata?.arxiv_papers) {
@@ -219,6 +229,7 @@ const App: React.FC = () => {
     setExpandedNodes(new Set());
     setSearchArxivPapers([]);
     setConceptDetail(null);
+    setBridgeAnalysis(null);  // 清空桥接分析数据
     // 不重置搜索模式和输入框内容，只清空画布
   };
 
@@ -465,8 +476,11 @@ const App: React.FC = () => {
           </Spin>
         </div>
       ) : nodes.length > 0 ? (
-        <div className="content-section">
-          <div className="graph-section">
+        <div className="content-section" style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
+          <div className="graph-section" style={{ 
+            flex: (bridgeAnalysis || selectedNode) ? '1 1 70%' : '1 1 100%',
+            minHeight: 'auto'
+          }}>
             <GraphVisualization
               nodes={nodes}
               edges={edges}
@@ -474,15 +488,113 @@ const App: React.FC = () => {
             />
           </div>
           
-          {selectedNode && (
-            <div className="detail-section">
-              <NodeDetailPanel
-                selectedNode={selectedNode}
-                expandedNodes={expandedNodes}
-                expandLoading={expandLoading}
-                onClose={() => setSelectedNode(null)}
-                onExpand={handleExpandNode}
-              />
+          {/* 右侧面板：优先显示节点详情，无节点详情时显示桥接路径分析 */}
+          {(selectedNode || bridgeAnalysis) && (
+            <div style={{ 
+              flex: '0 0 380px', 
+              display: 'flex',
+              flexDirection: 'column',
+              height: '600px'
+            }}>
+              {/* 节点详情面板 - 优先级更高 */}
+              {selectedNode ? (
+                <NodeDetailPanel
+                  selectedNode={selectedNode}
+                  expandedNodes={expandedNodes}
+                  expandLoading={expandLoading}
+                  onClose={() => setSelectedNode(null)}
+                  onExpand={handleExpandNode}
+                />
+              ) : (
+                /* 桥接路径分析面板（仅在无节点选中时显示） */
+                bridgeAnalysis && (
+                  <Card 
+                    style={{ 
+                      background: 'rgba(255, 255, 255, 0.95)',
+                      backdropFilter: 'blur(10px)',
+                      borderRadius: '12px',
+                      boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+                      height: '100%',
+                      display: 'flex',
+                      flexDirection: 'column'
+                    }}
+                    bodyStyle={{
+                      overflowY: 'auto',
+                      flex: 1,
+                      padding: '16px'
+                    }}
+                    title={
+                      <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#667eea' }}>
+                        🌉 桥接路径分析
+                      </div>
+                    }
+                  >
+                    <div style={{ marginBottom: '12px' }}>
+                      <strong>输入概念：</strong>
+                      <div style={{ marginTop: '8px' }}>
+                        {bridgeAnalysis.input_concepts.map((c: string, idx: number) => (
+                          <span key={idx}>
+                            <span style={{ 
+                              padding: '4px 12px', 
+                              background: '#e6f7ff', 
+                              borderRadius: '4px',
+                              margin: '4px',
+                              color: '#1890ff',
+                              display: 'inline-block'
+                            }}>
+                              {c}
+                            </span>
+                            {idx < bridgeAnalysis.input_concepts.length - 1 && (
+                              <div style={{ textAlign: 'center', margin: '4px 0' }}>↕</div>
+                            )}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    
+                    <div style={{ marginBottom: '12px', padding: '8px', background: '#f0f0f0', borderRadius: '4px' }}>
+                      <strong>桥接概念：</strong> {bridgeAnalysis.total_bridges} 个
+                    </div>
+                    
+                    {Object.entries(bridgeAnalysis.bridges_by_type).map(([type, bridges]: [string, any]) => (
+                      <div key={type} style={{ marginTop: '16px' }}>
+                        <div style={{ 
+                          fontWeight: 'bold', 
+                          color: type === '直接桥梁' ? '#52c41a' : (type === '间接桥梁' ? '#faad14' : '#8c8c8c'),
+                          marginBottom: '8px',
+                          fontSize: '14px'
+                        }}>
+                          【{type}】({bridges.length}个)
+                        </div>
+                        {bridges.map((bridge: any, idx: number) => (
+                          <div key={idx} style={{ 
+                            marginLeft: '8px', 
+                            marginBottom: '12px',
+                            padding: '10px',
+                            background: '#fafafa',
+                            borderRadius: '6px',
+                            borderLeft: '3px solid ' + (type === '直接桥梁' ? '#52c41a' : (type === '间接桥梁' ? '#faad14' : '#8c8c8c'))
+                          }}>
+                            <div style={{ fontWeight: 'bold', marginBottom: '6px', color: '#333' }}>
+                              • {bridge.name}
+                            </div>
+                            <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>
+                              <strong>连接:</strong> {bridge.connected.join(' + ')}
+                            </div>
+                            <div style={{ fontSize: '12px', color: '#666', lineHeight: '1.5' }}>
+                              <strong>原理:</strong> {bridge.principle}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                    
+                    <div style={{ marginTop: '16px', padding: '10px', background: '#e6f7ff', borderRadius: '6px', fontSize: '13px' }}>
+                      <strong>💡 总结：</strong> {bridgeAnalysis.summary}
+                    </div>
+                  </Card>
+                )
+              )}
             </div>
           )}
         </div>

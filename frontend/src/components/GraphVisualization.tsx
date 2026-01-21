@@ -53,10 +53,20 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
       .domain(['数学', '物理', '化学', '生物', '计算机', '社会学'])
       .range(['#FF6B6B', '#4ECDC4', '#95E1D3', '#F38181', '#AA96DA', '#FCBAD3']);
 
-    // 识别根节点（depth=0的节点，通常是第一个节点）
-    const rootNode = nodes.find((n: any) => n.depth === 0) || nodes[0];
+    // 识别节点类型
+    const inputNodes = nodes.filter((n: any) => n.is_input);  // 输入节点（功能3）
+    const bridgeNodes = nodes.filter((n: any) => n.is_bridge);  // 桥接节点（功能3）
+    const isBridgeMode = inputNodes.length > 0;  // 如果有输入节点，说明是bridge模式
     
-    console.log('[Graph] 根节点:', rootNode.id, rootNode.label);
+    // 根节点（非bridge模式使用）
+    const rootNode = isBridgeMode ? null : (nodes.find((n: any) => n.depth === 0) || nodes[0]);
+    
+    console.log('[Graph] Bridge模式:', isBridgeMode);
+    console.log('[Graph] 输入节点数:', inputNodes.length);
+    console.log('[Graph] 桥接节点数:', bridgeNodes.length);
+    if (rootNode) {
+      console.log('[Graph] 根节点:', rootNode.id, rootNode.label);
+    }
     console.log('[Graph] 总节点数:', nodes.length);
     console.log('[Graph] 总边数:', edges.length);
     console.log('[Graph] 边列表:', edges.map((e: any) => `${e.source} -> ${e.target}`));
@@ -100,44 +110,84 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
     
     // 为每个节点计算目标半径（根据深度）
     const getTargetRadius = (node: any) => {
-      const depth = node.depth || (node.id === rootNode.id ? 0 : 1);
-      if (depth === 0) return 0; // 根节点在中心
-      return 150 * depth; // 每一层距离中心150px
+      if (isBridgeMode) {
+        // Bridge模式：输入节点在外圈，桥接节点在内圈
+        if (node.is_input) return 200;  // 输入节点在外圈
+        if (node.is_bridge) return 0;   // 桥接节点在中心区域
+        return 150;  // 其他节点
+      } else {
+        // 普通模式：根据depth设置半径
+        const depth = node.depth || (rootNode && node.id === rootNode.id ? 0 : 1);
+        if (depth === 0) return 0; // 根节点在中心
+        return 150 * depth; // 每一层距离中心150px
+      }
     };
 
-    // 为子节点设置初始角度，使其围绕根节点均匀分布
-    const childNodes = nodes.filter((n: any) => n.id !== rootNode.id);
-    childNodes.forEach((node: any, index: number) => {
-      const angle = (index / childNodes.length) * 2 * Math.PI;
-      const radius = 150;
-      node.x = width / 2 + radius * Math.cos(angle);
-      node.y = (height / 2 - 190) + radius * Math.sin(angle);
-    });
+    // 设置初始位置
+    if (isBridgeMode) {
+      // Bridge模式：输入节点均匀分布在外圈
+      inputNodes.forEach((node: any, index: number) => {
+        const angle = (index / inputNodes.length) * 2 * Math.PI;
+        const radius = 200;
+        node.x = width / 2 + radius * Math.cos(angle);
+        node.y = height / 2 + radius * Math.sin(angle);
+      });
+      // 桥接节点在中心区域随机分布
+      bridgeNodes.forEach((node: any) => {
+        const angle = Math.random() * 2 * Math.PI;
+        const radius = Math.random() * 80;
+        node.x = width / 2 + radius * Math.cos(angle);
+        node.y = height / 2 + radius * Math.sin(angle);
+      });
+    } else {
+      // 普通模式：子节点围绕根节点均匀分布
+      const childNodes = nodes.filter((n: any) => rootNode && n.id !== rootNode.id);
+      childNodes.forEach((node: any, index: number) => {
+        const angle = (index / childNodes.length) * 2 * Math.PI;
+        const radius = 150;
+        node.x = width / 2 + radius * Math.cos(angle);
+        node.y = (height / 2 - 190) + radius * Math.sin(angle);
+      });
+    }
     
-    // 力导向图模拟 - 使用径向布局
+    // 力导向图模拟
+    const centerY = isBridgeMode ? height / 2 : height / 2 - 190;  // Bridge模式居中，普通模式偏上
+    
     const simulation = d3.forceSimulation(nodes as any)
       .force('link', d3.forceLink(edges)
         .id((d: any) => d.id)
         .distance((d: any) => {
-          // 缩短边长度，让子节点离根节点更近
-          const sourceDepth = (d.source as any).depth || 0;
-          const targetDepth = (d.target as any).depth || 0;
-          return 60 + Math.abs(targetDepth - sourceDepth) * 30;
+          if (isBridgeMode) {
+            // Bridge模式：输入节点到桥接节点的距离
+            const source = d.source as any;
+            const target = d.target as any;
+            if ((source.is_input && target.is_bridge) || (source.is_bridge && target.is_input)) {
+              return 150;  // 输入节点到桥接节点
+            }
+            return 100;
+          } else {
+            // 普通模式：根据层级调整边长度
+            const sourceDepth = (d.source as any).depth || 0;
+            const targetDepth = (d.target as any).depth || 0;
+            return 60 + Math.abs(targetDepth - sourceDepth) * 30;
+          }
         })
         .strength(1.2))
-      .force('charge', d3.forceManyBody().strength(-300))
-      .force('center', d3.forceCenter(width / 2, height / 2 - 190))  // 调整中心点
-      .force('collision', d3.forceCollide().radius(40))
-      // 径向力：将节点推向各自层级的圆环上，增加强度
-      .force('radial', d3.forceRadial((d: any) => getTargetRadius(d), width / 2, height / 2 - 190).strength(1.0));
+      .force('charge', d3.forceManyBody().strength(isBridgeMode ? -500 : -300))  // Bridge模式排斥力更强
+      .force('center', d3.forceCenter(width / 2, centerY))
+      .force('collision', d3.forceCollide().radius(50))
+      // 径向力：将节点推向各自层级的圆环上
+      .force('radial', d3.forceRadial((d: any) => getTargetRadius(d), width / 2, centerY).strength(isBridgeMode ? 0.8 : 1.0));
 
-    // 固定根节点在画布中心（稍微靠上）
-    simulation.nodes().forEach((node: any) => {
-      if (node.id === rootNode.id) {
-        node.fx = width / 2;
-        node.fy = height / 2 - 190;  // 向上偏移190px
-      }
-    });
+    // 固定根节点位置（仅普通模式）
+    if (!isBridgeMode && rootNode) {
+      simulation.nodes().forEach((node: any) => {
+        if (node.id === rootNode.id) {
+          node.fx = width / 2;
+          node.fy = centerY;
+        }
+      });
+    }
 
     // 绘制边（每条边包含line和title）
     const linkGroup = g.append('g')
@@ -183,10 +233,17 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
         .on('drag', dragged)
         .on('end', dragEnded));
 
-    // 绘制节点圆圈（增强动画和交互效果，根据深度调整大小）
+    // 绘制节点圆圈（增强动画和交互效果，根据类型调整大小）
     nodeGroup.append('circle')
       .attr('r', (d: any) => {
-        // 根据深度计算节点大小：深度越深，节点越小
+        // Bridge模式：输入节点大，桥接节点中等
+        if (d.is_input) {
+          return 30 + (d.credibility || 0) * 5;  // 输入节点最大
+        }
+        if (d.is_bridge) {
+          return 20 + (d.credibility || 0) * 3;  // 桥接节点中等
+        }
+        // 普通模式：根据深度计算节点大小
         const depth = d.depth || 0;
         const baseSize = depth === 0 ? 35 : (depth === 1 ? 18 : 12);  // 根节点35，一级子节点18，二级+12
         const credibilityBonus = d.credibility ? d.credibility * 5 : 0;
@@ -207,10 +264,20 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
       .on('mouseenter', function(_event, d: any) {
         const element = d3.select(this);
         element.interrupt(); // 中断之前的动画
-        const depth = d.depth || 0;
-        const baseSize = depth === 0 ? 35 : (depth === 1 ? 18 : 12);
-        const credibilityBonus = d.credibility ? d.credibility * 5 : 0;
-        const currentRadius = baseSize + credibilityBonus;
+        
+        // 计算当前半径
+        let currentRadius;
+        if (d.is_input) {
+          currentRadius = 30 + (d.credibility || 0) * 5;
+        } else if (d.is_bridge) {
+          currentRadius = 20 + (d.credibility || 0) * 3;
+        } else {
+          const depth = d.depth || 0;
+          const baseSize = depth === 0 ? 35 : (depth === 1 ? 18 : 12);
+          const credibilityBonus = d.credibility ? d.credibility * 5 : 0;
+          currentRadius = baseSize + credibilityBonus;
+        }
+        
         element
           .transition()
           .duration(200)
@@ -223,10 +290,20 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
         if (!isSelected) {
           const element = d3.select(this);
           element.interrupt(); // 中断之前的动画
-          const depth = d.depth || 0;
-          const baseSize = depth === 0 ? 35 : (depth === 1 ? 18 : 12);
-          const credibilityBonus = d.credibility ? d.credibility * 5 : 0;
-          const currentRadius = baseSize + credibilityBonus;
+          
+          // 计算当前半径
+          let currentRadius;
+          if (d.is_input) {
+            currentRadius = 30 + (d.credibility || 0) * 5;
+          } else if (d.is_bridge) {
+            currentRadius = 20 + (d.credibility || 0) * 3;
+          } else {
+            const depth = d.depth || 0;
+            const baseSize = depth === 0 ? 35 : (depth === 1 ? 18 : 12);
+            const credibilityBonus = d.credibility ? d.credibility * 5 : 0;
+            currentRadius = baseSize + credibilityBonus;
+          }
+          
           element
             .transition()
             .duration(200)
@@ -236,27 +313,31 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
         }
       });
 
-    // 节点标签（根节点居中显示，子节点显示在右侧）
+    // 节点标签（Bridge模式所有节点居中，普通模式根节点居中、子节点右侧）
     nodeGroup.append('text')
       .text((d) => d.label)
       .attr('font-size', 13)
       .attr('font-weight', 600)
       .attr('dx', (d: any) => {
-        // 根节点文本居中
+        // Bridge模式：所有节点文本居中
+        if (isBridgeMode) return 0;
+        // 普通模式：根节点居中，子节点右侧
         const depth = d.depth || 0;
         if (depth === 0) return 0;
-        // 子节点文本显示在右侧
         return (d.credibility ? 10 + d.credibility * 8 : 15) + 8;
       })
       .attr('dy', (d: any) => {
-        // 根节点文本垂直居中
+        // Bridge模式：所有节点文本垂直居中
+        if (isBridgeMode) return 5;
+        // 普通模式：根节点居中，子节点正常
         const depth = d.depth || 0;
-        if (depth === 0) return 5;  // 垂直居中（稍微下移以视觉居中）
-        // 子节点文本位置
+        if (depth === 0) return 5;
         return 4;
       })
       .attr('text-anchor', (d: any) => {
-        // 根节点文本居中对齐
+        // Bridge模式：所有节点居中对齐
+        if (isBridgeMode) return 'middle';
+        // 普通模式：根节点居中，子节点左对齐
         const depth = d.depth || 0;
         return depth === 0 ? 'middle' : 'start';
       })

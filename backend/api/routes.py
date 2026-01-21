@@ -121,6 +121,68 @@ async def generate_brief_summary(concept: str, wiki_definition: str = "") -> str
     return f"{concept}是一个重要的跨学科概念。"
 
 
+async def generate_bridge_edge_reasoning(
+    input_concept: str,
+    bridge_concept: str,
+    overall_principle: str
+) -> str:
+    """
+    为桥接概念的边生成单独的reasoning
+    
+    Args:
+        input_concept: 输入概念（如"熵"）
+        bridge_concept: 桥梁概念（如"信息论"）
+        overall_principle: 整体连接原理
+        
+    Returns:
+        专门解释这两个概念关系的reasoning
+    """
+    client = get_llm_client()
+    if not client:
+        return f"{input_concept}通过{bridge_concept}建立跨学科联系"
+    
+    try:
+        prompt = f"""请用一句话（30-60字）精确解释"{input_concept}"如何与"{bridge_concept}"相关联。
+
+整体背景：{overall_principle}
+
+要求：
+1. **必须明确说明{input_concept}在这个关联中的具体作用或特点**
+2. 突出{input_concept}与{bridge_concept}之间的独特关系
+3. 不要泛泛而谈，要针对{input_concept}这个特定概念
+4. 简洁精准，30-60字
+5. **必须是完整句子，句号结尾**
+
+直接输出解释，不要引号和额外文字。"""
+
+        response = await asyncio.wait_for(
+            client.chat.completions.create(
+                model=os.getenv("LLM_MODEL", "google/gemini-3-flash-preview"),
+                messages=[
+                    {"role": "system", "content": f"你是跨学科知识专家。请专门解释'{input_concept}'与'{bridge_concept}'的关联，确保每个输入概念的解释都是独特的。输出必须是完整的句子。"},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.5,
+                max_tokens=1000,
+                extra_body={"reasoning": {"enabled": False}}
+            ),
+            timeout=15.0
+        )
+        
+        if response and response.choices:
+            reasoning = response.choices[0].message.content.strip().strip('"\'""\'\'')
+            print(f"[DEBUG] LLM原始返回 ({input_concept}->{bridge_concept}): '{reasoning}' (长度: {len(reasoning)})")
+            if reasoning and len(reasoning) > 10:
+                return reasoning
+    except asyncio.TimeoutError:
+        print(f"[WARNING] 生成边reasoning超时: {input_concept}-{bridge_concept}")
+    except Exception as e:
+        print(f"[WARNING] 生成边reasoning失败: {input_concept}-{bridge_concept}, 错误类型: {type(e).__name__}, 详情: {str(e)}")
+    
+    # 使用overall_principle或默认值
+    return overall_principle if overall_principle else f"{input_concept}通过{bridge_concept}建立跨学科联系"
+
+
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -859,18 +921,48 @@ async def discover_bridge_concepts(request: BridgeRequest):
             "connection_principle": bridge["connection_principle"]
         })
         
-        # 4. 创建边：连接桥梁概念到输入概念
+        # 4. 创建边：为每个输入概念到桥梁概念生成单独的reasoning
         for input_concept in bridge["connected_concepts"]:
-            # 找到对应的中心节点
+            # 找到对应的输入节点
             source_node = next((n for n in center_nodes if n["label"] == input_concept.strip()), None)
             if source_node:
+                # 为这条边生成专门的reasoning，解释这个输入概念与桥梁概念的关系
+                edge_reasoning = await generate_bridge_edge_reasoning(
+                    input_concept=input_concept.strip(),
+                    bridge_concept=bridge_name,
+                    overall_principle=bridge["connection_principle"]
+                )
+                
+                print(f"[DEBUG] 边 {input_concept} → {bridge_name} 的reasoning: {edge_reasoning}")
+                
                 edges.append({
                     "source": source_node["id"],
                     "target": node_id,
                     "relation": "桥梁连接",
                     "weight": 0.85 if bridge_type == "直接桥梁" else (0.75 if bridge_type == "间接桥梁" else 0.65),
-                    "reasoning": bridge["connection_principle"]
+                    "reasoning": edge_reasoning
                 })
+    
+    # 5. 构建桥接路径分析数据（用于前端展示）
+    bridges_by_type = {}
+    for b in bridges:
+        btype = b["bridge_type"]
+        if btype not in bridges_by_type:
+            bridges_by_type[btype] = []
+        bridges_by_type[btype].append({
+            "name": b["name"],
+            "connected": b["connected_concepts"],
+            "principle": b["connection_principle"]
+        })
+    
+    bridge_analysis = {
+        "input_concepts": request.concepts,
+        "total_bridges": len(bridges),
+        "bridges_by_type": bridges_by_type,
+        "summary": f"通过{len(bridges)}个桥接概念连接了{len(request.concepts)}个输入概念"
+    }
+    
+    print(f"[SUCCESS] 功能3完成: 找到{len(bridges)}个桥梁概念")
     
     result = {
         "nodes": nodes,
@@ -879,11 +971,10 @@ async def discover_bridge_concepts(request: BridgeRequest):
             "function": "bridge_discovery",
             "input_concepts": request.concepts,
             "total_bridges": len(bridges),
-            "bridge_types": {bt: sum(1 for b in bridges if b["bridge_type"] == bt) for bt in ["直接桥梁", "间接桥梁", "原理性桥梁"]}
+            "bridge_types": {bt: sum(1 for b in bridges if b["bridge_type"] == bt) for bt in ["直接桥梁", "间接桥梁", "原理性桥梁"]},
+            "bridge_analysis": bridge_analysis  # 添加桥接路径分析数据
         }
     }
-    
-    print(f"[SUCCESS] 功能3完成: 找到{len(bridges)}个桥梁概念")
     
     return DiscoverResponse(status="success", request_id=request_id, data=result)
 
