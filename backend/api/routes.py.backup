@@ -1,635 +1,498 @@
-﻿"""AP"""
-from fastap mport APRouter, HTTPExcepton, Query
-from pydantc mport BaseModel, Feld
-from typng mport Lst, Optonal, Dct, Any
-mport httpx
-mport uud
-mport sys
-mport asynco
-mport os
-mport wkpeda
-from pathlb mport Path
-from dotenv mport load_dotenv
-from opena mport AsyncOpenA
+﻿"""API路由定义"""
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any
+import httpx
+import uuid
+import sys
+import asyncio
+import os
+import wikipedia
+from pathlib import Path
+from dotenv import load_dotenv
+from openai import AsyncOpenAI
 
-# 
-env_path = Path(__fle__).parent.parent.parent / ".env"
+# 加载环境变量
+env_path = Path(__file__).parent.parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
-# 
-try:
-    from ap.real_node_generator mport get_node_generator
-    USE_REAL_GENERATON = True
-    prnt("[NFO] ")
-except mportError:
-    USE_REAL_GENERATON = False
-    prnt("[WARNNG] Mock")
+# ==================== LLM客户端 ====================
+_llm_client = None
 
-# ==================== LLM?====================
-_llm_clent = None
-
-def get_llm_clent():
-    """LLM?""
-    global _llm_clent
-    f _llm_clent s None:
-        ap_key = os.getenv("OPENROUTER_AP_KEY") or os.getenv("OPENA_AP_KEY")
-        f ap_key:
-            _llm_clent = AsyncOpenA(
-                ap_key=ap_key,
-                base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.a/ap/v1")
+def get_llm_client():
+    """获取LLM客户端单例"""
+    global _llm_client
+    if _llm_client is None:
+        api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
+        if api_key:
+            _llm_client = AsyncOpenAI(
+                api_key=api_key,
+                base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
             )
-            prnt("[NFO] LLM?)
-    return _llm_clent
+            print("[INFO] LLM客户端已初始化")
+    return _llm_client
 
 
-async def translate_to_englsh(chnese_text: str) -> str:
+async def translate_to_english(chinese_text: str) -> str:
     """
-    LLM
+    使用LLM将中文学术术语翻译成英文
     
     Args:
-        chnese_text: 
+        chinese_text: 中文文本
         
     Returns:
-        
+        英文翻译
     """
-    clent = get_llm_clent()
-    f not clent:
-        return chnese_text
+    client = get_llm_client()
+    if not client:
+        return chinese_text
     
     try:
-        response = awat asynco.wat_for(
-            clent.chat.completons.create(
-                model=os.getenv("LLM_MODEL", "google/gemn-2.0-flash-001"),
+        response = await asyncio.wait_for(
+            client.chat.completions.create(
+                model=os.getenv("LLM_MODEL", "google/gemini-2.0-flash-001"),
                 messages=[
-                    {"role": "system", "content": "?},
-                    {"role": "user", "content": f"{chnese_text}"}
+                    {"role": "system", "content": "你是一个专业的学术翻译助手，擅长将中文学术术语翻译成精准的英文�?},
+                    {"role": "user", "content": f"将以下中文学术术语翻译成英文（只输出英文，不要解释）：{chinese_text}"}
                 ],
                 temperature=0.1,
                 max_tokens=50
             ),
-            tmeout=10.0
+            timeout=10.0
         )
         
-        f response and response.choces:
-            translaton = response.choces[0].message.content.strp().strp('"\'""''')
-            prnt(f"[SUCCESS] : {chnese_text} -> {translaton}")
-            return translaton
-    except Excepton as e:
-        prnt(f"[WARNNG] : {chnese_text}, {str(e)}")
+        if response and response.choices:
+            translation = response.choices[0].message.content.strip().strip('"\'""''')
+            print(f"[SUCCESS] 翻译: {chinese_text} -> {translation}")
+            return translation
+    except Exception as e:
+        print(f"[WARNING] 翻译失败: {chinese_text}, {str(e)}")
     
-    return chnese_text
+    return chinese_text
 
 
-async def generate_bref_summary(concept: str, wk_defnton: str = "") -> str:
+async def generate_brief_summary(concept: str, wiki_definition: str = "") -> str:
     """
-    LLM
+    使用LLM生成一句话简�?
     
     Args:
-        concept: 
-        wk_defnton: 
+        concept: 概念名称
+        wiki_definition: 维基百科定义（作为参考）
         
     Returns:
-        30-80
+        一句话简介（30-80字）
     """
-    clent = get_llm_clent()
-    f not clent:
-        # LLM?
-        f wk_defnton:
-            return wk_defnton[:100] + "..." f len(wk_defnton) > 100 else wk_defnton
-        return f"{concept}?
+    client = get_llm_client()
+    if not client:
+        # 无LLM时回退到截断维基定�?
+        if wiki_definition:
+            return wiki_definition[:100] + "..." if len(wiki_definition) > 100 else wiki_definition
+        return f"{concept}是一个重要的跨学科概念�?
     
     try:
-        prompt = f""""{concept}"30-80
-1. 
-2. ?
-3. ""???
+        prompt = f"""请为概念"{concept}"生成一句话简介（30-80字），要求：
+1. 简洁精准，突出核心特征
+2. 通俗易懂，适合普通读�?
+3. 不要使用"是指"�?是一�?等开�?
 
-{f'{wk_defnton[:200]}' f wk_defnton else ''}
+{f'参考定义：{wiki_definition[:200]}' if wiki_definition else ''}
 
-?""
+直接输出简介内容，不要任何解释或标点外的其他内容�?""
 
-        response = awat asynco.wat_for(
-            clent.chat.completons.create(
-                model=os.getenv("LLM_MODEL", "google/gemn-2.0-flash-001"),
+        response = await asyncio.wait_for(
+            client.chat.completions.create(
+                model=os.getenv("LLM_MODEL", "google/gemini-2.0-flash-001"),
                 messages=[
-                    {"role": "system", "content": "?},
+                    {"role": "system", "content": "你是一个专业的学术概念总结助手，擅长用简洁的语言概括复杂概念�?},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.3,
                 max_tokens=150
             ),
-            tmeout=15.0
+            timeout=15.0
         )
         
-        f response and response.choces:
-            summary = response.choces[0].message.content.strp()
-            # ?
-            summary = summary.strp('"\'""''')
-            prnt(f"[SUCCESS] LLM? {concept} -> {summary[:50]}...")
+        if response and response.choices:
+            summary = response.choices[0].message.content.strip()
+            # 清理可能的引�?
+            summary = summary.strip('"\'""''')
+            print(f"[SUCCESS] LLM生成简�? {concept} -> {summary[:50]}...")
             return summary
-    except asynco.TmeoutError:
-        prnt(f"[WARNNG] LLM? {concept}")
-    except Excepton as e:
-        prnt(f"[WARNNG] LLM? {concept}, {str(e)}")
+    except asyncio.TimeoutError:
+        print(f"[WARNING] LLM生成简介超�? {concept}")
+    except Exception as e:
+        print(f"[WARNING] LLM生成简介失�? {concept}, {str(e)}")
     
-    # 
-    f wk_defnton:
-        return wk_defnton[:100] + "..." f len(wk_defnton) > 100 else wk_defnton
-    return f"{concept}?
+    # 回退逻辑
+    if wiki_definition:
+        return wiki_definition[:100] + "..." if len(wiki_definition) > 100 else wiki_definition
+    return f"{concept}是一个重要的跨学科概念�?
 
-# 
-sys.path.nsert(0, str(Path(__fle__).parent.parent.parent))
+# 添加项目路径
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-# ?
-ENABLE_EXTERNAL_VERFCATON = os.getenv("ENABLE_EXTERNAL_VERFCATON", "false").lower() == "true"
-prnt(f"[NFO] ? {'' f ENABLE_EXTERNAL_VERFCATON else ''}")
+# 是否启用外部验证（从环境变量读取�?
+ENABLE_EXTERNAL_VERIFICATION = os.getenv("ENABLE_EXTERNAL_VERIFICATION", "false").lower() == "true"
+print(f"[INFO] 外部验证状�? {'启用' if ENABLE_EXTERNAL_VERIFICATION else '禁用'}")
 
 try:
-    from database.neo4j_clent mport neo4j_clent
-    from database.reds_clent mport reds_clent
-    from confg mport settngs
-    from shared.schemas.concept_node mport ConceptNode
-    from shared.schemas.concept_edge mport ConceptEdge
-except mportError:
-    # Mock
-    class MockClent:
+    from database.neo4j_client import neo4j_client
+    from database.redis_client import redis_client
+    from config import settings
+    from shared.schemas.concept_node import ConceptNode
+    from shared.schemas.concept_edge import ConceptEdge
+except ImportError:
+    # Mock对象用于测试
+    class MockClient:
         async def get(self, key): return None
         async def set(self, key, value, ex=None): pass
         async def query(self, query, params=None): return []
         async def create_concept_node(self, node): pass
         async def create_concept_edge(self, edge): pass
-    neo4j_clent = MockClent()
-    reds_clent = MockClent()
+    neo4j_client = MockClient()
+    redis_client = MockClient()
     
-    class MockSettngs:
-        AGENT_AP_URL = "http://localhost:5000"
-        REDS_CACHE_TTL = 3600
-    settngs = MockSettngs()
+    class MockSettings:
+        AGENT_API_URL = "http://localhost:5000"
+        REDIS_CACHE_TTL = 3600
+    settings = MockSettings()
     
-    ConceptNode = dct
-    ConceptEdge = dct
+    ConceptNode = dict
+    ConceptEdge = dict
 
-router = APRouter()
+router = APIRouter()
 
 
-# ==================== AP ====================
+# ==================== 维基百科API工具函数 ====================
 
-async def get_wkpeda_defnton(concept: str, max_length: nt = 500) -> Dct[str, Any]:
+async def get_wikipedia_definition(concept: str, max_length: int = 500) -> Dict[str, Any]:
     """
-    wkpeda
+    从维基百科获取概念的权威定义（使用wikipedia包）
     
-    AP?
-    - ?
-    - ?
-    - 
+    API作用�?
+    - 获取概念的百科全书定�?
+    - 为知识图谱节点提供权威内容来�?
+    - 支持中文和英文两种语言查询
     
     Args:
-        concept: 
-        max_length: ?
+        concept: 概念名称
+        max_length: 最大定义长�?
         
     Returns:
         {
-            "defnton": str,  # 
-            "exsts": bool,     # 
-            "url": str,         # 
-            "source": str       # 
+            "definition": str,  # 维基百科定义
+            "exists": bool,     # 是否找到
+            "url": str,         # 维基百科链接
+            "source": str       # 来源
         }
     """
-    # 
-    f not ENABLE_EXTERNAL_VERFCATON:
+    # 如果禁用外部验证，直接返回空结果
+    if not ENABLE_EXTERNAL_VERIFICATION:
         return {
-            "defnton": "",
-            "exsts": False,
+            "definition": "",
+            "exists": False,
             "url": "",
             "source": "LLM"
         }
     
-    prnt(f"[NFO] Wkpeda: {concept}")
+    print(f"[INFO] 正在查询Wikipedia: {concept}")
     
-    loop = asynco.get_event_loop()
+    loop = asyncio.get_event_loop()
     
-    # ?
+    # 先尝试中文维基百�?
     try:
-        wkpeda.set_lang("zh")
-        page = awat loop.run_n_executor(None, wkpeda.page, concept)
-        summary = page.summary[:max_length] f len(page.summary) > max_length else page.summary
-        prnt(f"[SUCCESS] Wkpeda: {concept}")
+        wikipedia.set_lang("zh")
+        page = await loop.run_in_executor(None, wikipedia.page, concept)
+        summary = page.summary[:max_length] if len(page.summary) > max_length else page.summary
+        print(f"[SUCCESS] 中文Wikipedia找到: {concept}")
         return {
-            "defnton": summary,
-            "exsts": True,
+            "definition": summary,
+            "exists": True,
             "url": page.url,
-            "source": "Wkpeda"
+            "source": "Wikipedia"
         }
-    except wkpeda.exceptons.DsambguatonError as e:
-        # 
-        f e.optons:
+    except wikipedia.exceptions.DisambiguationError as e:
+        # 歧义页面，选择第一个选项
+        if e.options:
             try:
-                page = awat loop.run_n_executor(None, wkpeda.page, e.optons[0])
-                summary = page.summary[:max_length] f len(page.summary) > max_length else page.summary
-                prnt(f"[SUCCESS] Wkpeda(): {concept} -> {e.optons[0]}")
+                page = await loop.run_in_executor(None, wikipedia.page, e.options[0])
+                summary = page.summary[:max_length] if len(page.summary) > max_length else page.summary
+                print(f"[SUCCESS] 中文Wikipedia找到(歧义): {concept} -> {e.options[0]}")
                 return {
-                    "defnton": summary,
-                    "exsts": True,
+                    "definition": summary,
+                    "exists": True,
                     "url": page.url,
-                    "source": "Wkpeda"
+                    "source": "Wikipedia"
                 }
-            except Excepton:
+            except Exception:
                 pass
-    except wkpeda.exceptons.PageError:
+    except wikipedia.exceptions.PageError:
         pass
-    except Excepton as e:
-        prnt(f"[WARNNG] Wkpeda: {e}")
+    except Exception as e:
+        print(f"[WARNING] 中文Wikipedia查询失败: {e}")
     
-    # ?
+    # 再尝试英文维基百�?
     try:
-        wkpeda.set_lang("en")
-        page = awat loop.run_n_executor(None, wkpeda.page, concept)
-        summary = page.summary[:max_length] f len(page.summary) > max_length else page.summary
-        prnt(f"[SUCCESS] Wkpeda: {concept}")
+        wikipedia.set_lang("en")
+        page = await loop.run_in_executor(None, wikipedia.page, concept)
+        summary = page.summary[:max_length] if len(page.summary) > max_length else page.summary
+        print(f"[SUCCESS] 英文Wikipedia找到: {concept}")
         return {
-            "defnton": summary,
-            "exsts": True,
+            "definition": summary,
+            "exists": True,
             "url": page.url,
-            "source": "Wkpeda"
+            "source": "Wikipedia"
         }
-    except wkpeda.exceptons.DsambguatonError as e:
-        f e.optons:
+    except wikipedia.exceptions.DisambiguationError as e:
+        if e.options:
             try:
-                page = awat loop.run_n_executor(None, wkpeda.page, e.optons[0])
-                summary = page.summary[:max_length] f len(page.summary) > max_length else page.summary
-                prnt(f"[SUCCESS] Wkpeda(): {concept} -> {e.optons[0]}")
+                page = await loop.run_in_executor(None, wikipedia.page, e.options[0])
+                summary = page.summary[:max_length] if len(page.summary) > max_length else page.summary
+                print(f"[SUCCESS] 英文Wikipedia找到(歧义): {concept} -> {e.options[0]}")
                 return {
-                    "defnton": summary,
-                    "exsts": True,
+                    "definition": summary,
+                    "exists": True,
                     "url": page.url,
-                    "source": "Wkpeda"
+                    "source": "Wikipedia"
                 }
-            except Excepton:
+            except Exception:
                 pass
-    except wkpeda.exceptons.PageError:
+    except wikipedia.exceptions.PageError:
         pass
-    except Excepton as e:
-        prnt(f"[WARNNG] Wkpeda: {e}")
+    except Exception as e:
+        print(f"[WARNING] 英文Wikipedia查询失败: {e}")
     
-    prnt(f"[WARNNG] Wkpeda? {concept}")
+    print(f"[WARNING] Wikipedia未找�? {concept}")
     return {
-        "defnton": "",
-        "exsts": False,
+        "definition": "",
+        "exists": False,
         "url": "",
         "source": "LLM"
     }
 
 
-async def search_arxv_papers(query: str, max_results: nt = 5) -> tuple[Lst[Dct[str, Any]], str]:
+async def search_arxiv_papers(query: str, max_results: int = 5) -> tuple[List[Dict[str, Any]], str]:
     """
-    Arxv
+    在Arxiv搜索相关论文
     
     Args:
-        query: ?
-        max_results: 
+        query: 搜索关键�?
+        max_results: 最大结果数
         
     Returns:
-        (, ) - error_msgNone?
+        (论文列表, 错误信息) - 如果成功error_msg为None，失败返回错误描�?
     """
-    # 
-    f not ENABLE_EXTERNAL_VERFCATON:
-        return [], "Arxv?
+    # 如果禁用外部验证，直接返回空列表
+    if not ENABLE_EXTERNAL_VERIFICATION:
+        return [], "Arxiv查询已禁�?
     
-    # 
-    f any('\u4e00' <= char <= '\u9fff' for char n query):
-        prnt(f"[NFO] ? {query}")
-        query = awat translate_to_englsh(query)
-        prnt(f"[NFO] ? {query}")
+    # 检测是否为中文，如果是则翻译成英文
+    if any('\u4e00' <= char <= '\u9fff' for char in query):
+        print(f"[INFO] 检测到中文查询，正在翻�? {query}")
+        query = await translate_to_english(query)
+        print(f"[INFO] 翻译后查�? {query}")
     
-    prnt(f"[NFO] Arxv: {query}")
-    mport xml.etree.ElementTree as ET
+    print(f"[INFO] 正在查询Arxiv论文: {query}")
+    import xml.etree.ElementTree as ET
     
-    # HTTPS URL
-    arxv_url = "https://export.arxv.org/ap/query"
+    # 使用HTTPS URL
+    arxiv_url = "https://export.arxiv.org/api/query"
     params = {
         "search_query": f"all:{query}",
         "start": 0,
         "max_results": max_results,
         "sortBy": "relevance",
-        "sortOrder": "descendng"
+        "sortOrder": "descending"
     }
     
     try:
-        async wth httpx.AsyncClent(tmeout=10.0, follow_redrects=True) as clent:
-            response = awat clent.get(arxv_url, params=params)
-            f response.status_code != 200:
-                error_msg = f"Arxv AP {response.status_code}"
-                prnt(f"[WARNNG] {error_msg}")
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            response = await client.get(arxiv_url, params=params)
+            if response.status_code != 200:
+                error_msg = f"Arxiv API返回状态码 {response.status_code}"
+                print(f"[WARNING] {error_msg}")
                 return [], error_msg
             
-            # XML
-            root = ET.fromstrng(response.text)
+            # 解析XML
+            root = ET.fromstring(response.text)
             ns = {
                 'atom': 'http://www.w3.org/2005/Atom',
-                'arxv': 'http://arxv.org/schemas/atom'
+                'arxiv': 'http://arxiv.org/schemas/atom'
             }
             
             papers = []
-            for entry n root.fndall('atom:entry', ns):
-                ttle = entry.fnd('atom:ttle', ns)
-                summary = entry.fnd('atom:summary', ns)
-                lnk = entry.fnd('atom:d', ns)
-                publshed = entry.fnd('atom:publshed', ns)
+            for entry in root.findall('atom:entry', ns):
+                title = entry.find('atom:title', ns)
+                summary = entry.find('atom:summary', ns)
+                link = entry.find('atom:id', ns)
+                published = entry.find('atom:published', ns)
                 
                 authors = []
-                for author n entry.fndall('atom:author', ns):
-                    name = author.fnd('atom:name', ns)
-                    f name s not None:
-                        authors.append(name.text.strp())
+                for author in entry.findall('atom:author', ns):
+                    name = author.find('atom:name', ns)
+                    if name is not None:
+                        authors.append(name.text.strip())
                 
                 papers.append({
-                    "ttle": ttle.text.strp() f ttle s not None else "",
-                    "authors": authors[:3],  # ??
-                    "summary": (summary.text.strp()[:200] + "...") f summary s not None and len(summary.text.strp()) > 200 else (summary.text.strp() f summary s not None else ""),
-                    "lnk": lnk.text.strp() f lnk s not None else "",
-                    "publshed": publshed.text.strp()[:10] f publshed s not None else ""
+                    "title": title.text.strip() if title is not None else "",
+                    "authors": authors[:3],  # 最�?个作�?
+                    "summary": (summary.text.strip()[:200] + "...") if summary is not None and len(summary.text.strip()) > 200 else (summary.text.strip() if summary is not None else ""),
+                    "link": link.text.strip() if link is not None else "",
+                    "published": published.text.strip()[:10] if published is not None else ""
                 })
             
-            prnt(f"[SUCCESS] Arxv{len(papers)}?)
+            print(f"[SUCCESS] Arxiv查询成功，找到{len(papers)}篇论�?)
             return papers, None
-    except httpx.TmeoutExcepton:
-        error_msg = "Arxv AP"
-        prnt(f"[ERROR] {error_msg}")
+    except httpx.TimeoutException:
+        error_msg = "Arxiv API请求超时，可能是网络问题"
+        print(f"[ERROR] {error_msg}")
         return [], error_msg
     except httpx.HTTPError as e:
-        error_msg = f"Arxv AP: {str(e)}"
-        prnt(f"[ERROR] {error_msg}")
+        error_msg = f"Arxiv API网络错误: {str(e)}"
+        print(f"[ERROR] {error_msg}")
         return [], error_msg
-    except Excepton as e:
-        error_msg = f"Arxv: {str(e)}"
-        prnt(f"[ERROR] {error_msg}")
+    except Exception as e:
+        error_msg = f"Arxiv搜索异常: {str(e)}"
+        print(f"[ERROR] {error_msg}")
         return [], error_msg
 
 
-# ==================== LLM ====================
+# ==================== Mock数据生成函数 ====================
 
-async def get_real_dscovery_result(concept: str, max_concepts: nt = 10) -> dct:
-    """LLMMock"""
-    
-    generator = get_node_generator()
-    
-    # 1. 
-    s_academc = awat generator.s_academc_concept(concept)
-    f not s_academc:
-        prnt(f"[WARNNG] '{concept}'")
-        return {
-            "status": "error",
-            "message": f"'{concept}'",
-            "data": {"nodes": [], "edges": [], "metadata": {}}
-        }
-    
-    # 2. LLM
-    prnt(f"[NFO] LLM: {concept}")
-    related_concepts = awat generator.generate_related_concepts(concept, max_concepts)
-    
-    f not related_concepts:
-        prnt(f"[WARNNG] ")
-        related_concepts = [{"label": concept, "dscplne": "", "relaton": "self"}]
-    
-    # 3. Wkpeda
-    nodes = []
-    center_concept = concept  # 
-    
-    # 
-    center_wk = awat get_wkpeda_defnton(concept, max_length=500)
-    center_bref = awat generate_bref_summary(concept, center_wk.get("defnton", ""))
-    
-    center_node = {
-        "d": f"{concept.replace(' ', '_')}_0",
-        "label": concept,
-        "dscplne": "",
-        "defnton": truncate_defnton(center_wk.get("defnton", f"{concept}"), 500),
-        "bref_summary": center_bref,
-        "credblty": 1.0,  # credblty1
-        "source": "Wkpeda" f center_wk.get("exsts") else "LLM",
-        "wk_url": center_wk.get("url", "")
-    }
-    nodes.append(center_node)
-    
-    # 
-    for dx, rel_concept n enumerate(related_concepts, 1):
-        label = rel_concept["label"]
-        dscplne = rel_concept["dscplne"]
-        
-        # Wkpeda
-        wk_result = awat get_wkpeda_defnton(label, max_length=500)
-        defnton = wk_result.get("defnton", f"{label}{concept}")
-        
-        # LLM
-        bref_summary = awat generate_bref_summary(label, defnton)
-        
-        # ****
-        smlarty = awat generator.compute_smlarty(
-            f"{concept}: {center_wk.get('defnton', '')[:200]}",
-            f"{label}: {defnton[:200]}"
-        )
-        
-        # Credblty
-        base_credblty = 0.95 f wk_result.get("exsts") else 0.70
-        credblty = mn(0.99, base_credblty * (0.7 + 0.3 * smlarty))  # 
-        
-        prnt(f"[DEBUG] {label}: ={smlarty:.3f}, Credblty={credblty:.3f}")
-        
-        node_d = f"{label.replace(' ', '_')}_{dscplne.replace(' ', '_')}_{dx}"
-        nodes.append({
-            "d": node_d,
-            "label": label,
-            "dscplne": dscplne,
-            "defnton": truncate_defnton(defnton, 500),
-            "bref_summary": bref_summary,
-            "credblty": round(credblty, 3),
-            "smlarty": round(smlarty, 3),  # 
-            "source": "Wkpeda" f wk_result.get("exsts") else "LLM",
-            "wk_url": wk_result.get("url", "")
-        })
-    
-    # 4. LLM
-    edges = []
-    for dx, rel_concept n enumerate(related_concepts, 1):
-        f dx < len(nodes):
-            edge = {
-                "source": center_node["d"],
-                "target": nodes[dx]["d"],
-                "relaton": rel_concept.get("relaton", "related"),
-                "weght": nodes[dx]["credblty"],  # credblty
-                "reasonng": f"{concept}{rel_concept['label']}{rel_concept.get('relaton', 'related')}"
-            }
-            edges.append(edge)
-    
-    prnt(f"[SUCCESS] LLM {len(nodes)} , {len(edges)} ")
-    
-    # 5. Arxv
-    arxv_papers, arxv_error = [], None
-    f ENABLE_EXTERNAL_VERFCATON:
-        try:
-            arxv_papers, arxv_error = awat asynco.wat_for(
-                search_arxv_papers(concept, max_results=5),
-                tmeout=5.0
-            )
-        except Excepton as e:
-            arxv_error = str(e)
-    
-    return {
-        "status": "success",
-        "data": {
-            "nodes": nodes,
-            "edges": edges,
-            "metadata": {
-                "total_nodes": len(nodes),
-                "total_edges": len(edges),
-                "verfed_nodes": sum(1 for n n nodes f n["source"] == "Wkpeda"),
-                "avg_credblty": sum(n["credblty"] for n n nodes) / len(nodes) f nodes else 0,
-                "avg_smlarty": sum(n.get("smlarty", 0) for n n nodes[1:]) / max(len(nodes) - 1, 1),
-                "processng_tme": 2.0,
-                "mode": "real_llm_generaton",
-                "arxv_papers": arxv_papers,
-                "arxv_status": "success" f not arxv_error else "faled"
-            }
-        }
-    }
-
-
-# ==================== Mock ====================
-
-def truncate_defnton(text: str, max_length: nt = 500) -> str:
-    """?""
-    f not text:
+def truncate_definition(text: str, max_length: int = 500) -> str:
+    """截断定义文本到指定长�?""
+    if not text:
         return ""
-    f len(text) <= max_length:
+    if len(text) <= max_length:
         return text
     return text[:max_length - 3] + "..."
 
 
-async def get_mock_dscovery_result(concept: str) -> dct:
-    """"""
+async def get_mock_discovery_result(concept: str) -> dict:
+    """生成概念挖掘结果（优先使用维基百科定义）"""
     
-    # ?
-    concept_dscplnes = {
-        "?: [
-            {"label": "?, "dscplne": "?, "eng_name": "entropy thermodynamcs"},
-            {"label": "?, "dscplne": "?, "eng_name": "nformaton entropy"},
-            {"label": "?, "dscplne": "", "eng_name": "statstcal entropy"},
-            {"label": "?, "dscplne": "?, "eng_name": "Shannon entropy"},
-            {"label": "?, "dscplne": "?, "eng_name": "Boltzmann entropy"},
-            {"label": "", "dscplne": "", "eng_name": "maxmum entropy prncple"},
+    # 预定义概念映射（学科分类�?
+    concept_disciplines = {
+        "�?: [
+            {"label": "�?, "discipline": "热力�?, "eng_name": "entropy thermodynamics"},
+            {"label": "信息�?, "discipline": "信息�?, "eng_name": "information entropy"},
+            {"label": "统计�?, "discipline": "统计力学", "eng_name": "statistical entropy"},
+            {"label": "香农�?, "discipline": "信息�?, "eng_name": "Shannon entropy"},
+            {"label": "玻尔兹曼�?, "discipline": "物理�?, "eng_name": "Boltzmann entropy"},
+            {"label": "最大熵原理", "discipline": "数学", "eng_name": "maximum entropy principle"},
         ],
-        "": [
-            {"label": "", "dscplne": "?, "eng_name": "neural network"},
-            {"label": "?, "dscplne": "?, "eng_name": "neuron"},
-            {"label": "?, "dscplne": "", "eng_name": "actvaton functon"},
-            {"label": "", "dscplne": "", "eng_name": "backpropagaton"},
-            {"label": "", "dscplne": "", "eng_name": "convolutonal neural network"},
-            {"label": "", "dscplne": "", "eng_name": "recurrent neural network"},
+        "神经网络": [
+            {"label": "神经网络", "discipline": "计算机科�?, "eng_name": "neural network"},
+            {"label": "神经�?, "discipline": "生物�?, "eng_name": "neuron"},
+            {"label": "激活函�?, "discipline": "数学", "eng_name": "activation function"},
+            {"label": "反向传播", "discipline": "机器学习", "eng_name": "backpropagation"},
+            {"label": "卷积神经网络", "discipline": "深度学习", "eng_name": "convolutional neural network"},
+            {"label": "递归神经网络", "discipline": "深度学习", "eng_name": "recurrent neural network"},
         ],
-        "": [
-            {"label": "", "dscplne": "", "eng_name": "deep learnng"},
-            {"label": "", "dscplne": "", "eng_name": "gradent descent"},
-            {"label": "", "dscplne": "", "eng_name": "loss functon"},
-            {"label": "?, "dscplne": "?, "eng_name": "overfttng"},
-            {"label": "?, "dscplne": "", "eng_name": "regularzaton"},
-            {"label": "?, "dscplne": "", "eng_name": "batch normalzaton"},
+        "深度学习": [
+            {"label": "深度学习", "discipline": "人工智能", "eng_name": "deep learning"},
+            {"label": "梯度下降", "discipline": "优化理论", "eng_name": "gradient descent"},
+            {"label": "损失函数", "discipline": "数学", "eng_name": "loss function"},
+            {"label": "过拟�?, "discipline": "统计�?, "eng_name": "overfitting"},
+            {"label": "正则�?, "discipline": "机器学习", "eng_name": "regularization"},
+            {"label": "批归一�?, "discipline": "深度学习", "eng_name": "batch normalization"},
         ],
-        "": [
-            {"label": "", "dscplne": "?, "eng_name": "quantum computng"},
-            {"label": "", "dscplne": "", "eng_name": "qubt"},
-            {"label": "", "dscplne": "", "eng_name": "quantum entanglement"},
-            {"label": "?, "dscplne": "", "eng_name": "quantum gate"},
-            {"label": "", "dscplne": "", "eng_name": "quantum algorthm"},
-            {"label": "", "dscplne": "", "eng_name": "quantum decoherence"},
+        "量子计算": [
+            {"label": "量子计算", "discipline": "计算机科�?, "eng_name": "quantum computing"},
+            {"label": "量子比特", "discipline": "量子物理", "eng_name": "qubit"},
+            {"label": "量子纠缠", "discipline": "量子力学", "eng_name": "quantum entanglement"},
+            {"label": "量子�?, "discipline": "量子信息", "eng_name": "quantum gate"},
+            {"label": "量子算法", "discipline": "算法理论", "eng_name": "quantum algorithm"},
+            {"label": "量子退相干", "discipline": "量子物理", "eng_name": "quantum decoherence"},
         ]
     }
     
-    # 
+    # 通用概念模板
     default_concepts = [
-        {"label": concept, "dscplne": "?, "eng_name": concept},
-        {"label": f"{concept}?, "dscplne": "", "eng_name": f"{concept} applcatons"},
-        {"label": f"{concept}", "dscplne": "", "eng_name": f"{concept} theory"},
-        {"label": f"{concept}?, "dscplne": "?, "eng_name": f"{concept} hstory"},
-        {"label": f"{concept}?, "dscplne": "", "eng_name": f"{concept} mathematcal model"},
+        {"label": concept, "discipline": "跨学�?, "eng_name": concept},
+        {"label": f"{concept}的应�?, "discipline": "应用领域", "eng_name": f"{concept} applications"},
+        {"label": f"{concept}的理论基础", "discipline": "理论基础", "eng_name": f"{concept} theory"},
+        {"label": f"{concept}的历史发�?, "discipline": "科学�?, "eng_name": f"{concept} history"},
+        {"label": f"{concept}的数学模�?, "discipline": "数学", "eng_name": f"{concept} mathematical model"},
     ]
     
-    # 
-    concept_lst = concept_dscplnes.get(concept, default_concepts)
+    # 选择概念列表
+    concept_list = concept_disciplines.get(concept, default_concepts)
     
-    # LLM?
+    # 并行获取维基百科定义和LLM简�?
     nodes = []
-    for dx, c n enumerate(concept_lst):
-        node_d = f"{c['label'].replace(' ', '_')}_{c['dscplne'].replace(' ', '_')}_{dx}"
+    for idx, c in enumerate(concept_list):
+        node_id = f"{c['label'].replace(' ', '_')}_{c['discipline'].replace(' ', '_')}_{idx}"
         
-        # 
-        wk_result = awat get_wkpeda_defnton(c['label'], max_length=500)
+        # 获取维基百科定义
+        wiki_result = await get_wikipedia_definition(c['label'], max_length=500)
         
-        # 
-        f not wk_result["exsts"] and c.get("eng_name"):
-            wk_result = awat get_wkpeda_defnton(c['eng_name'], max_length=500)
+        # 如果中文没找到，尝试用英文名搜索
+        if not wiki_result["exists"] and c.get("eng_name"):
+            wiki_result = await get_wikipedia_definition(c['eng_name'], max_length=500)
         
-        # ?
-        f wk_result["exsts"]:
-            defnton = wk_result["defnton"]
-            source = "Wkpeda"
-            credblty = 0.95
+        # 生成定义和简�?
+        if wiki_result["exists"]:
+            definition = wiki_result["definition"]
+            source = "Wikipedia"
+            credibility = 0.95
         else:
-            # LLM?
-            defnton = f"{c['label']}{c['dscplne']}?
+            # 使用备用定义（LLM生成标记�?
+            definition = f"关于{c['label']}的基本概念，属于{c['discipline']}领域的核心知识点�?
             source = "LLM"
-            credblty = 0.75
+            credibility = 0.75
         
-        # LLM?
-        bref_summary = awat generate_bref_summary(c['label'], defnton)
+        # 使用LLM生成一句话简�?
+        brief_summary = await generate_brief_summary(c['label'], definition)
         
         nodes.append({
-            "d": node_d,
+            "id": node_id,
             "label": c['label'],
-            "dscplne": c['dscplne'],
-            "defnton": truncate_defnton(defnton, 500),
-            "bref_summary": bref_summary,  # LLM?
-            "credblty": credblty,
+            "discipline": c['discipline'],
+            "definition": truncate_definition(definition, 500),
+            "brief_summary": brief_summary,  # LLM生成的一句话简�?
+            "credibility": credibility,
             "source": source,
-            "wk_url": wk_result.get("url", "")
+            "wiki_url": wiki_result.get("url", "")
         })
     
-    # ?
+    # 生成�?
     edges = []
-    f len(nodes) > 1:
-        # 
+    if len(nodes) > 1:
+        # 中心节点与其他节点的关系
         center_node = nodes[0]
-        prnt(f"[DEBUG] : {center_node['d']} ({center_node['label']})")
-        for , node n enumerate(nodes[1:], 1):
+        print(f"[DEBUG] 中心节点: {center_node['id']} ({center_node['label']})")
+        for i, node in enumerate(nodes[1:], 1):
             edge = {
-                "source": center_node["d"],
-                "target": node["d"],
-                "relaton": "related_to",
-                "weght": 0.8 - ( * 0.05),
-                "reasonng": f"{center_node['label']}{node['label']}"
+                "source": center_node["id"],
+                "target": node["id"],
+                "relation": "related_to",
+                "weight": 0.8 - (i * 0.05),
+                "reasoning": f"{center_node['label']}与{node['label']}在概念上存在关联"
             }
             edges.append(edge)
-            prnt(f"[DEBUG] ? {edge['source']} -> {edge['target']}")
+            print(f"[DEBUG] 生成�? {edge['source']} -> {edge['target']}")
     
-    prnt(f"[DEBUG]  {len(nodes)} ? {len(edges)} ")
+    print(f"[DEBUG] 总计生成 {len(nodes)} 个节�? {len(edges)} 条边")
     
-    # arxv
-    arxv_papers = []
-    arxv_error = "Arxv?
+    # 搜索arxiv论文（容错处理，即使失败也不影响主功能）
+    arxiv_papers = []
+    arxiv_error = "Arxiv查询已禁�?
     
-    # 
-    f ENABLE_EXTERNAL_VERFCATON:
+    # 只有明确启用时才调用，并设置超时
+    if ENABLE_EXTERNAL_VERIFICATION:
         try:
-            mport asynco
-            arxv_papers, arxv_error = awat asynco.wat_for(
-                search_arxv_papers(concept, max_results=5),
-                tmeout=5.0  # 5?
+            import asyncio
+            arxiv_papers, arxiv_error = await asyncio.wait_for(
+                search_arxiv_papers(concept, max_results=5),
+                timeout=5.0  # 5秒超�?
             )
-        except asynco.TmeoutError:
-            prnt(f"[WARNNG] Arxv?)
-            arxv_error = "Arxv"
-        except Excepton as e:
-            prnt(f"[ERROR] Arxv: {str(e)}")
-            arxv_error = f"Arxv: {str(e)}"
+        except asyncio.TimeoutError:
+            print(f"[WARNING] Arxiv搜索超时，跳�?)
+            arxiv_error = "Arxiv搜索超时"
+        except Exception as e:
+            print(f"[ERROR] Arxiv搜索异常: {str(e)}")
+            arxiv_error = f"Arxiv搜索异常: {str(e)}"
     
     return {
         "status": "success",
@@ -639,174 +502,174 @@ async def get_mock_dscovery_result(concept: str) -> dct:
             "metadata": {
                 "total_nodes": len(nodes),
                 "total_edges": len(edges),
-                "verfed_nodes": sum(1 for n n nodes f n["source"] == "Wkpeda"),
-                "avg_credblty": sum(n["credblty"] for n n nodes) / len(nodes) f nodes else 0,
-                "processng_tme": 1.5,
-                "mode": "mock_wth_wkpeda",
-                "arxv_papers": arxv_papers,
-                "arxv_status": "success" f arxv_error s None else "faled",
-                "arxv_error": arxv_error
+                "verified_nodes": sum(1 for n in nodes if n["source"] == "Wikipedia"),
+                "avg_credibility": sum(n["credibility"] for n in nodes) / len(nodes) if nodes else 0,
+                "processing_time": 1.5,
+                "mode": "mock_with_wikipedia",
+                "arxiv_papers": arxiv_papers,
+                "arxiv_status": "success" if arxiv_error is None else "failed",
+                "arxiv_error": arxiv_error
             }
         }
     }
 
 
-# ==================== / ====================
+# ==================== 请求/响应模型 ====================
 
-class DscoverRequest(BaseModel):
-    """"""
-    concept: str = Feld(..., mn_length=1, max_length=100, descrpton="")
-    dscplnes: Optonal[Lst[str]] = Feld(
+class DiscoverRequest(BaseModel):
+    """概念挖掘请求模型"""
+    concept: str = Field(..., min_length=1, max_length=100, description="核心概念")
+    disciplines: Optional[List[str]] = Field(
         default=None, 
-        descrpton="?
+        description="学科列表，默认全部学�?
     )
-    depth: nt = Feld(default=2, ge=1, le=3, descrpton="")
-    max_concepts: nt = Feld(default=30, ge=10, le=100, descrpton="")
+    depth: int = Field(default=2, ge=1, le=3, description="挖掘深度")
+    max_concepts: int = Field(default=30, ge=10, le=100, description="最大概念数")
 
 
-class DscoverResponse(BaseModel):
-    """"""
+class DiscoverResponse(BaseModel):
+    """概念挖掘响应模型"""
     status: str
-    request_d: str
-    data: Dct[str, Any]
+    request_id: str
+    data: Dict[str, Any]
 
 
 class GraphResponse(BaseModel):
-    """"""
+    """图谱查询响应模型"""
     status: str
-    data: Dct[str, Any]
+    data: Dict[str, Any]
 
 
-# ==================== AP ====================
+# ==================== API路由 ====================
 
-@router.post("/dscover", response_model=DscoverResponse)
-async def dscover_concepts(request: DscoverRequest):
-    """ - LLM
+@router.post("/discover", response_model=DiscoverResponse)
+async def discover_concepts(request: DiscoverRequest):
+    """概念挖掘接口 - 调用成员A的Agent服务
     
-    
-    1. Reds
-    2. LLM
-    3. 
-    4. Neo4j
-    5. Reds
+    功能�?
+    1. 检查Redis缓存
+    2. 调用Agent服务进行概念挖掘（如不可用则使用Mock数据�?
+    3. 保存结果到Neo4j
+    4. 缓存结果到Redis
     """
     
-    # 1. ?
-    cache_key = f"dscover:{request.concept}:{':'.jon(request.dscplnes or [])}"
-    cached = awat reds_clent.get(cache_key)
-    f cached:
-        return DscoverResponse(
+    # 1. 检查缓�?
+    cache_key = f"discover:{request.concept}:{':'.join(request.disciplines or [])}"
+    cached = await redis_client.get(cache_key)
+    if cached:
+        return DiscoverResponse(
             status="success",
-            request_d=cached["request_d"],
+            request_id=cached["request_id"],
             data=cached["data"]
         )
     
-    # 2. AgentA?
-    agent_url = f"{settngs.AGENT_AP_URL}/dscover"
-    request_d = str(uud.uud4())
+    # 2. 调用Agent服务（成员A提供�?
+    agent_url = f"{settings.AGENT_API_URL}/discover"
+    request_id = str(uuid.uuid4())
     result = None
     
-    # MockLLMArxv?
-    f USE_REAL_GENERATON:`n        prnt(f"[NFO]  LLM: {request.concept}")`n        result = awat get_real_dscovery_result(request.concept, request.max_concepts)`n    else:`n        prnt(f"[WARNNG]  Mock")`n        result = awat get_mock_dscovery_result(request.concept)
+    # 直接使用Mock模式（稳定快速，避免LLM超时和Arxiv错误�?
+    print(f"[INFO] 使用Wikipedia+Mock模式返回数据")
+    result = await get_mock_discovery_result(request.concept)
     
-    # LLMarxv?
-    # ENABLE_EXTERNAL_VERFCATON=false
+    # 以下是真实LLM调用的代码（已禁用，因为会触发大量arxiv调用导致超时�?
+    # 如需启用，请取消注释并确保ENABLE_EXTERNAL_VERIFICATION=false
     """
     try:
-        from agents.orchestrator mport get_orchestrator
-        from dotenv mport load_dotenv
-        load_dotenv()  # 
+        from agents.orchestrator import get_orchestrator
+        from dotenv import load_dotenv
+        load_dotenv()  # 确保加载环境变量
         
         orchestrator = get_orchestrator()
-        prnt(f"[NFO] LLM: {request.concept}")
+        print(f"[INFO] 使用真实LLM调用概念挖掘: {request.concept}")
         
-        response_obj = awat orchestrator.dscover(
+        response_obj = await orchestrator.discover(
             concept=request.concept,
-            dscplnes=request.dscplnes,
+            disciplines=request.disciplines,
             depth=request.depth,
             max_concepts=request.max_concepts,
-            enable_verfcaton=False  # 
+            enable_verification=False  # 禁用外部验证
         )
     """
     
-    # 3. Neo4j
-    f result.get("status") == "success":
+    # 3. 保存到Neo4j
+    if result.get("status") == "success":
         nodes = result["data"]["nodes"]
         edges = result["data"]["edges"]
         
         try:
-            # 
-            for node n nodes:
-                awat neo4j_clent.create_concept_node(node)
-            # ?
-            for edge n edges:
-                awat neo4j_clent.create_concept_edge(edge)
-        except Excepton as e:
-            # Neo4j?
-            prnt(f"[WARNNG] Neo4j: {e}")
+            # 保存节点
+            for node in nodes:
+                await neo4j_client.create_concept_node(node)
+            # 保存�?
+            for edge in edges:
+                await neo4j_client.create_concept_edge(edge)
+        except Exception as e:
+            # Neo4j保存失败不影响返回结果，只记录错�?
+            print(f"[WARNING] 保存到Neo4j失败: {e}")
         
-        # 4. 
+        # 4. 缓存结果
         cache_data = {
-            "request_d": request_d,
+            "request_id": request_id,
             "data": result["data"]
         }
         try:
-            awat reds_clent.set(cache_key, cache_data, ex=3600)
-        except Excepton as e:
-            prnt(f"[WARNNG] : {e}")
+            await redis_client.set(cache_key, cache_data, ex=3600)
+        except Exception as e:
+            print(f"[WARNING] 缓存失败: {e}")
     
-    # ?
+    # 返回前输出详细信�?
     response_data = result.get("data", {})
-    prnt(f"[DEBUG] : {len(response_data.get('nodes', []))} ? {len(response_data.get('edges', []))} ")
-    f response_data.get('edges'):
-        prnt(f"[DEBUG] ? {[(e['source'], e['target']) for e n response_data['edges'][:3]]}...")
+    print(f"[DEBUG] 返回结果: {len(response_data.get('nodes', []))} 个节�? {len(response_data.get('edges', []))} 条边")
+    if response_data.get('edges'):
+        print(f"[DEBUG] 边列�? {[(e['source'], e['target']) for e in response_data['edges'][:3]]}...")
     
-    return DscoverResponse(
+    return DiscoverResponse(
         status=result.get("status", "success"),
-        request_d=request_d,
+        request_id=request_id,
         data=result.get("data", {})
     )
 
 
-@router.get("/graph/{concept_d}", response_model=GraphResponse)
-async def get_graph(concept_d: str):
-    """?
+@router.get("/graph/{concept_id}", response_model=GraphResponse)
+async def get_graph(concept_id: str):
+    """查询指定概念的图谱数�?
     
     Args:
-        concept_d: D
+        concept_id: 概念ID
         
     Returns:
-        nodes + edges?
+        图谱数据（nodes + edges�?
     """
     try:
-        graph_data = awat neo4j_clent.query_graph(concept_d)
+        graph_data = await neo4j_client.query_graph(concept_id)
         return GraphResponse(
             status="success",
             data=graph_data
         )
-    except Excepton as e:
-        rase HTTPExcepton(
+    except Exception as e:
+        raise HTTPException(
             status_code=500,
-            detal=f": {str(e)}"
+            detail=f"查询图谱失败: {str(e)}"
         )
 
 
 @router.get("/concepts/search")
 async def search_concepts(
-    keyword: str = Query(..., mn_length=1, descrpton="?),
-    lmt: nt = Query(default=10, ge=1, le=50, descrpton="")
+    keyword: str = Query(..., min_length=1, description="搜索关键�?),
+    limit: int = Query(default=10, ge=1, le=50, description="返回数量")
 ):
-    """
+    """搜索概念
     
     Args:
-        keyword: ?
-        lmt: 
+        keyword: 搜索关键�?
+        limit: 返回数量限制
         
     Returns:
-        ?
+        匹配的概念列�?
     """
     try:
-        concepts = awat neo4j_clent.search_concepts(keyword, lmt)
+        concepts = await neo4j_client.search_concepts(keyword, limit)
         return {
             "status": "success",
             "data": {
@@ -815,137 +678,137 @@ async def search_concepts(
                 "concepts": concepts
             }
         }
-    except Excepton as e:
-        rase HTTPExcepton(
+    except Exception as e:
+        raise HTTPException(
             status_code=500,
-            detal=f": {str(e)}"
+            detail=f"搜索失败: {str(e)}"
         )
 
 
-@router.get("/dscplnes")
-async def get_dscplnes():
-    """?""
+@router.get("/disciplines")
+async def get_disciplines():
+    """获取所有学科列�?""
     try:
-        dscplnes = awat neo4j_clent.get_all_dscplnes()
+        disciplines = await neo4j_client.get_all_disciplines()
         return {
             "status": "success",
             "data": {
-                "dscplnes": dscplnes,
-                "total": len(dscplnes)
+                "disciplines": disciplines,
+                "total": len(disciplines)
             }
         }
-    except Excepton as e:
-        rase HTTPExcepton(
+    except Exception as e:
+        raise HTTPException(
             status_code=500,
-            detal=f": {str(e)}"
+            detail=f"获取学科列表失败: {str(e)}"
         )
 
 
 @router.delete("/cache/clear")
-async def clear_cache(pattern: str = Query(default="*", descrpton="?)):
-    """
+async def clear_cache(pattern: str = Query(default="*", description="缓存键模�?)):
+    """清除缓存
     
     Args:
-        pattern: ?"dscover:*"
+        pattern: 缓存键模式，�?"discover:*"
     """
     try:
-        awat reds_clent.clear_pattern(pattern)
+        await redis_client.clear_pattern(pattern)
         return {
             "status": "success",
-            "message": f"?'{pattern}' ?
+            "message": f"已清除匹�?'{pattern}' 的缓�?
         }
-    except Excepton as e:
-        rase HTTPExcepton(
+    except Exception as e:
+        raise HTTPException(
             status_code=500,
-            detal=f": {str(e)}"
+            detail=f"清除缓存失败: {str(e)}"
         )
 
 
 @router.get("/stats")
 async def get_stats():
-    """"""
+    """获取系统统计信息"""
     try:
-        reds_stats = awat reds_clent.get_stats()
+        redis_stats = await redis_client.get_stats()
         return {
             "status": "success",
             "data": {
-                "reds": reds_stats,
+                "redis": redis_stats,
                 "neo4j": {
-                    "connected": awat neo4j_clent.s_connected()
+                    "connected": await neo4j_client.is_connected()
                 }
             }
         }
-    except Excepton as e:
-        rase HTTPExcepton(
+    except Exception as e:
+        raise HTTPException(
             status_code=500,
-            detal=f": {str(e)}"
+            detail=f"获取统计信息失败: {str(e)}"
         )
 
-@router.get("/concept/{concept_name}/detal")
-async def get_concept_detal(concept_name: str):
+@router.get("/concept/{concept_name}/detail")
+async def get_concept_detail(concept_name: str):
+    """获取概念的详细介绍（由大模型生成的扩展信息）
+    
+    用于"相关概念展开"功能，返回大模型生成的详细概念介�?
     """
+    # 获取维基百科基础定义
+    wiki_result = await get_wikipedia_definition(concept_name, max_length=500)
     
-    ""?
-    """
-    # 
-    wk_result = awat get_wkpeda_defnton(concept_name, max_length=500)
+    # 搜索相关arxiv论文（容错处理）
+    arxiv_papers, arxiv_error = await search_arxiv_papers(concept_name, max_results=5)
     
-    # arxv
-    arxv_papers, arxv_error = awat search_arxv_papers(concept_name, max_results=5)
-    
-    # ?
-    detaled_ntro = f"""
-**{concept_name}** ?
+    # 生成详细介绍（模拟大模型生成�?
+    detailed_intro = f"""
+**{concept_name}** 是一个跨学科的重要概念�?
 
-### 
-{wk_result['defnton'] f wk_result['exsts'] else f'{concept_name}?}
+### 基本定义
+{wiki_result['definition'] if wiki_result['exists'] else f'{concept_name}是一个涉及多个领域的核心概念�?}
 
-### 
-{concept_name}?
-- ****?
-- **?*
-- **?*?
-- ****
+### 学科关联
+{concept_name}在以下领域有重要应用�?
+- **数学领域**：作为理论基础和形式化描述的工�?
+- **物理学领�?*：用于描述和解释自然现象
+- **计算机科学领�?*：在算法设计和系统实现中的应�?
+- **工程领域**：实际应用和工程实现
 
-### 
-?
+### 发展历程
+该概念经历了从理论提出到实践应用的发展过程，在不同历史时期由不同学者贡献了重要的理论基础�?
 
-### 
-{concept_name}?
+### 核心原理
+{concept_name}的核心在于理解其基本机制和运作原理，这涉及到多学科知识的综合运用�?
 
-### 
-{concept_name}?
+### 实际应用
+在实际应用中，{concept_name}被广泛用于解决复杂问题，特别是在跨学科研究和工程实践中发挥着关键作用�?
 """
     
     return {
         "status": "success",
         "data": {
             "concept": concept_name,
-            "wk_defnton": wk_result["defnton"] f wk_result["exsts"] else None,
-            "wk_url": wk_result["url"] f wk_result["exsts"] else None,
-            "wk_source": wk_result["source"],
-            "detaled_ntroducton": detaled_ntro.strp(),
-            "related_papers": arxv_papers,
-            "papers_count": len(arxv_papers),
-            "arxv_status": "success" f arxv_error s None else "faled",
-            "arxv_error": arxv_error
+            "wiki_definition": wiki_result["definition"] if wiki_result["exists"] else None,
+            "wiki_url": wiki_result["url"] if wiki_result["exists"] else None,
+            "wiki_source": wiki_result["source"],
+            "detailed_introduction": detailed_intro.strip(),
+            "related_papers": arxiv_papers,
+            "papers_count": len(arxiv_papers),
+            "arxiv_status": "success" if arxiv_error is None else "failed",
+            "arxiv_error": arxiv_error
         }
     }
 
 
-@router.get("/arxv/search")
-async def search_arxv(
-    query: str = Query(..., mn_length=1, descrpton="?),
-    max_results: nt = Query(default=10, ge=1, le=50, descrpton="")
+@router.get("/arxiv/search")
+async def search_arxiv(
+    query: str = Query(..., min_length=1, description="搜索关键�?),
+    max_results: int = Query(default=10, ge=1, le=50, description="最大结果数")
 ):
-    """Arxv
+    """搜索Arxiv论文
     
-    arxv AP?
+    用于验证arxiv API是否能成功检索给定关键词的相关文�?
     """
-    papers, error_msg = awat search_arxv_papers(query, max_results=max_results)
+    papers, error_msg = await search_arxiv_papers(query, max_results=max_results)
     
     return {
-        "status": "success" f error_msg s None else "partal",
+        "status": "success" if error_msg is None else "partial",
         "data": {
             "query": query,
             "total": len(papers),
@@ -955,118 +818,118 @@ async def search_arxv(
     }
 
 
-# ==================== AP ====================
+# ==================== 展开节点API ====================
 
 class ExpandRequest(BaseModel):
-    """"""
-    node_d: str = Feld(..., descrpton="D")
-    node_label: str = Feld(..., descrpton="")
-    exstng_nodes: Lst[str] = Feld(default=[], descrpton="D")
-    max_new_nodes: nt = Feld(default=10, ge=1, le=20, descrpton="")
+    """展开请求模型"""
+    node_id: str = Field(..., description="要展开的节点ID")
+    node_label: str = Field(..., description="节点名称")
+    existing_nodes: List[str] = Field(default=[], description="已存在的节点ID列表")
+    max_new_nodes: int = Field(default=10, ge=1, le=20, description="最大新增节点数")
 
 
 @router.post("/expand")
 async def expand_node(request: ExpandRequest):
-    """ - 
+    """展开节点 - 获取相关概念
     
-    ?
-    1. 
-    2. Wkpeda
-    3. 
+    功能�?
+    1. 基于选中节点发现更多相关概念
+    2. 优先使用Wikipedia定义
+    3. 返回新的节点和边
     """
-    prnt(f"[NFO] : {request.node_label} (d={request.node_d})")
+    print(f"[INFO] 展开节点: {request.node_label} (id={request.node_id})")
     
-    # Wkpeda?
+    # 直接使用智能Wikipedia搜索相关概念（更可靠�?
     new_nodes = []
     new_edges = []
     
-    # 1. Wkpeda
-    parent_wk = awat get_wkpeda_defnton(request.node_label, max_length=500)
+    # 1. 获取父概念的Wikipedia页面
+    parent_wiki = await get_wikipedia_definition(request.node_label, max_length=500)
     
-    # 2. 
-    doman_specfc_concepts = {
-        "": [
-            ("", "?, "sub_feld"),
-            ("", "?, "foundaton"),
-            ("", "?, "methodology"),
+    # 2. 预定义领域特定的扩展映射
+    domain_specific_concepts = {
+        "机器学习": [
+            ("深度学习", "计算机科�?, "sub_field"),
+            ("神经网络", "计算机科�?, "foundation"),
+            ("监督学习", "方法�?, "methodology"),
         ],
-        "": [
-            ("", "?, "foundaton"),
-            ("", "?, "methodology"),
-            ("?, "", "applcaton"),
+        "量子计算": [
+            ("量子纠缠", "物理�?, "foundation"),
+            ("量子算法", "计算机科�?, "methodology"),
+            ("量子密码�?, "应用领域", "application"),
         ],
-        "": [
-            ("", "?, "sub_feld"),
-            ("", "", "methodology"),
-            ("?, "", "applcaton"),
+        "深度学习": [
+            ("卷积神经网络", "计算机科�?, "sub_field"),
+            ("反向传播", "算法", "methodology"),
+            ("计算机视�?, "应用领域", "application"),
         ],
-        "": [
-            ("", "?, "sub_feld"),
-            ("", "", "applcaton"),
-            ("", "?, "methodology"),
+        "人工智能": [
+            ("机器学习", "计算机科�?, "sub_field"),
+            ("自然语言处理", "应用领域", "application"),
+            ("专家系统", "方法�?, "methodology"),
         ],
-        "": [
-            ("?, "?, "foundaton"),
-            ("", "", "applcaton"),
-            ("", "?, "methodology"),
+        "自然语言处理": [
+            ("词嵌�?, "计算机科�?, "foundation"),
+            ("机器翻译", "应用领域", "application"),
+            ("情感分析", "方法�?, "methodology"),
         ],
-        "?: [
-            ("", "", "applcaton"),
-            ("?, "?, "methodology"),
-            ("", "?, "foundaton"),
+        "计算机视�?: [
+            ("图像识别", "应用领域", "application"),
+            ("目标检�?, "方法�?, "methodology"),
+            ("卷积神经网络", "计算机科�?, "foundation"),
         ],
     }
     
-    # 
-    f request.node_label n doman_specfc_concepts:
-        related_concepts = doman_specfc_concepts[request.node_label]
+    # 使用预定义映射或生成通用概念
+    if request.node_label in domain_specific_concepts:
+        related_concepts = domain_specific_concepts[request.node_label]
     else:
-        # ?
+        # 通用策略：生成理论、方法、应�?
         related_concepts = [
-            (f"{request.node_label}", "", "theoretcal_foundaton"),
-            (f"{request.node_label}", "?, "methodology"),
-            (f"{request.node_label}", "", "applcaton"),
+            (f"{request.node_label}理论", "理论基础", "theoretical_foundation"),
+            (f"{request.node_label}方法", "方法�?, "methodology"),
+            (f"{request.node_label}应用", "应用领域", "application"),
         ]
     
-    # 3. Wkpeda
-    for , (term, dscplne, relaton_type) n enumerate(related_concepts):
-        node_d = f"{request.node_d}_expand_{}"
-        f node_d not n request.exstng_nodes:
-            # Wkpeda
-            term_wk = awat get_wkpeda_defnton(term, max_length=500)
+    # 3. 为每个相关概念获取Wikipedia定义
+    for i, (term, discipline, relation_type) in enumerate(related_concepts):
+        node_id = f"{request.node_id}_expand_{i}"
+        if node_id not in request.existing_nodes:
+            # 尝试获取Wikipedia定义
+            term_wiki = await get_wikipedia_definition(term, max_length=500)
             
-            # ?
-            orgnal_term = term
-            f not term_wk["exsts"]:
-                # ?
+            # 如果找不到，尝试搜索更通用的概�?
+            original_term = term
+            if not term_wiki["exists"]:
+                # 尝试去掉修饰�?
                 alt_terms = [
-                    term.replace(f"{request.node_label}?, "").replace(f"{request.node_label}", ""),
-                    term.splt("?)[-1] f "? n term else term,
+                    term.replace(f"{request.node_label}�?, "").replace(f"{request.node_label}", ""),
+                    term.split("�?)[-1] if "�? in term else term,
                 ]
-                for alt_term n alt_terms:
-                    f alt_term.strp():
-                        term_wk = awat get_wkpeda_defnton(alt_term.strp(), max_length=500)
-                        f term_wk["exsts"]:
-                            term = alt_term.strp()  # ?
+                for alt_term in alt_terms:
+                    if alt_term.strip():
+                        term_wiki = await get_wikipedia_definition(alt_term.strip(), max_length=500)
+                        if term_wiki["exists"]:
+                            term = alt_term.strip()  # 使用找到定义的术�?
                             break
             
             new_nodes.append({
-                "d": node_d,
-                "label": term f term_wk["exsts"] else orgnal_term,
-                "dscplne": dscplne,
-                "defnton": term_wk["defnton"] f term_wk["exsts"] else f"{orgnal_term}{request.node_label}?,
-                "credblty": 0.90 f term_wk["exsts"] else 0.70,
-                "source": "Wkpeda" f term_wk["exsts"] else "LLM",
-                "wk_url": term_wk.get("url", "")
+                "id": node_id,
+                "label": term if term_wiki["exists"] else original_term,
+                "discipline": discipline,
+                "definition": term_wiki["definition"] if term_wiki["exists"] else f"{original_term}是{request.node_label}相关的重要概念�?,
+                "credibility": 0.90 if term_wiki["exists"] else 0.70,
+                "source": "Wikipedia" if term_wiki["exists"] else "LLM",
+                "wiki_url": term_wiki.get("url", "")
             })
             
-            # ?
+            # 创建结构化的边关�?
             new_edges.append({
-                "source": request.node_d,
-                "target": node_d,
-                "relaton": relaton_type,
-                "weght": 0.80,
-                "reasonng": f"{term}{request.node_label}{relaton_type}"
+                "source": request.node_id,
+                "target": node_id,
+                "relation": relation_type,
+                "weight": 0.80,
+                "reasoning": f"{term}是{request.node_label}的{relation_type}"
             })
     
     return {
@@ -1074,10 +937,9 @@ async def expand_node(request: ExpandRequest):
         "data": {
             "nodes": new_nodes,
             "edges": new_edges,
-            "parent_d": request.node_d
+            "parent_id": request.node_id
         }
     }
 
 
-# ==================== AAP ====================
-
+# ==================== AI�ʴ�API ====================
