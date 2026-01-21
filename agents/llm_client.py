@@ -17,7 +17,7 @@ class LLMClient:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "google/gemini-2.0-flash-001",  # 使用稳定的flash模型
+        model: str = "google/gemini-3-flash-preview",  # 使用最新的 3.0 flash 模型
         temperature: float = 0.3,
         max_tokens: int = 2000,
         timeout: int = 90,  # 增加超时到90秒
@@ -40,7 +40,7 @@ class LLMClient:
         if not self.api_key:
             logger.warning("OPENROUTER_API_KEY not set, LLM calls will fail")
         
-        self.model = model or os.getenv("LLM_MODEL", "google/gemini-2.0-flash-001")
+        self.model = model or os.getenv("LLM_MODEL", "google/gemini-3-flash-preview")
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout

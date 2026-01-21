@@ -19,6 +19,8 @@ load_dotenv(dotenv_path=env_path)
 # ==================== LLM客户端 ====================
 _llm_client = None
 _embedding_client = None
+_last_embedding_time = 0  # 记录上次embedding请求时间
+_embedding_min_interval = 0.2  # 最小请求间隔（秒）
 
 def get_llm_client():
     """获取LLM客户端（用于文本生成）"""
@@ -40,8 +42,19 @@ def get_embedding_client():
     if _embedding_client is None:
         api_key = os.getenv("OPENAI_API_KEY")
         if api_key:
-            _embedding_client = AsyncOpenAI(api_key=api_key)
-            print("[INFO] Embedding客户端已初始化（OpenAI）")
+            import httpx
+            # 配置HTTP客户端：增加超时和连接限制
+            http_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(60.0, connect=10.0),  # 总超时60秒，连接超时10秒
+                limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
+            )
+            _embedding_client = AsyncOpenAI(
+                api_key=api_key,
+                http_client=http_client
+            )
+            print("[INFO] Embedding客户端已初始化（OpenAI，超时60秒）")
+        else:
+            print("[WARNING] OPENAI_API_KEY未设置，相似度计算将使用默认值")
     return _embedding_client
 
 
@@ -70,7 +83,12 @@ async def generate_related_concepts(
     
     # 构建跨学科提示词
     existing_str = "、".join(existing_concepts) if existing_concepts else "无"
-    prompt = f"""你是一个跨学科知识挖掘专家。请为概念"{parent_concept}"挖掘{max_count}个跨领域的相关概念。
+    prompt = f"""为概念"{parent_concept}"生成{max_count}个跨学科相关概念。
+
+【关键要求】
+1. 必须生成完整的{max_count}个概念（少一个都不行）
+2. 每个概念来自不同学科领域
+3. 与"{parent_concept}"有深层原理关联
 
 【核心任务】发现跨学科的"远亲概念" - 不同领域中原理相通的概念
 
@@ -99,7 +117,7 @@ async def generate_related_concepts(
 - 每个概念必须来自不同学科（避免扎堆）
 - 必须解释跨学科关联的底层原理
 
-【输出格式】（每行一个概念）
+【输出格式】（每行一个概念，不要序号）
 概念名|学科|关系类型|跨学科原理
 
 示例：
@@ -108,21 +126,21 @@ async def generate_related_concepts(
 PageRank算法|图论|structural_isomorphism|本质是马尔可夫链的平稳分布求解
 遗传算法|进化生物学|evolutionary_mechanism|复制达尔文的变异-选择-遗传进化过程
 
-请直接输出{max_count}个跨学科概念，不要解释："""
+【最后提醒】务必输出{max_count}个概念，每行一个，直接输出，不要任何解释和额外文字。"""
 
     try:
         response = await asyncio.wait_for(
             client.chat.completions.create(
                 model=os.getenv("LLM_MODEL", "google/gemini-3-flash-preview"),
                 messages=[
-                    {"role": "system", "content": "你是跨学科知识挖掘专家，擅长发现不同领域间的深层原理关联和结构同构性。你的核心能力是识别'远亲概念' - 那些表面看起来毫不相关，但底层数学、物理或信息论原理完全一致的概念。"},
+                    {"role": "system", "content": f"你是跨学科知识挖掘专家。关键要求：必须严格生成{max_count}个概念，不能多也不能少。每个概念单独一行，格式：概念名|学科|关系类型|跨学科原理。不要任何解释、序号或额外内容。"},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.4,
-                max_tokens=800,
-                extra_body={"reasoning": {"enabled": True}}
+                temperature=0.5,
+                max_tokens=2000,
+                extra_body={"reasoning": {"enabled": False}}
             ),
-            timeout=20.0
+            timeout=40.0
         )
         
         if response and response.choices:
@@ -162,22 +180,8 @@ PageRank算法|图论|structural_isomorphism|本质是马尔可夫链的平稳�
             
             if concepts:
                 print(f"[SUCCESS] LLM生成了{len(concepts)}个相关概念")
-                
-                # 启用学术概念过滤
-                filtered_concepts = []
-                for concept in concepts:
-                    is_academic = await is_academic_concept(concept["name"])
-                    if is_academic:
-                        filtered_concepts.append(concept)
-                    else:
-                        print(f"[FILTER] 非学术概念已过滤: {concept['name']}")
-                
-                if filtered_concepts:
-                    print(f"[SUCCESS] 学术过滤后剩余{len(filtered_concepts)}个概念")
-                    return filtered_concepts[:max_count]
-                else:
-                    print(f"[WARNING] 学术过滤后无概念剩余，返回原始结果")
-                    return concepts[:max_count]
+                # 学术过滤已禁用，直接返回LLM生成的概念
+                return concepts[:max_count]
     
     except asyncio.TimeoutError:
         print(f"[WARNING] LLM生成超时，使用预定义概念")
@@ -217,7 +221,7 @@ def _get_fallback_concepts(parent_concept: str) -> List[Dict[str, str]]:
 
 async def compute_similarity(concept1: str, concept2: str) -> float:
     """
-    计算两个概念的语义相似度
+    计算两个概念的语义相似度（带智能重试和请求控制）
     
     Args:
         concept1: 概念1
@@ -226,45 +230,162 @@ async def compute_similarity(concept1: str, concept2: str) -> float:
     Returns:
         相似度分数 [0, 1]
     """
+    global _last_embedding_time
+    
     client = get_embedding_client()
     if not client:
         print("[WARNING] Embedding客户端未初始化，返回默认相似度")
         return 0.75
     
+    # 请求速率控制：避免并发请求过多
+    import time
+    current_time = time.time()
+    time_since_last = current_time - _last_embedding_time
+    if time_since_last < _embedding_min_interval:
+        wait_time = _embedding_min_interval - time_since_last
+        await asyncio.sleep(wait_time)
+    
+    _last_embedding_time = time.time()
+    
+    # 智能重试：最多2次
+    max_retries = 2
+    for attempt in range(max_retries + 1):
+        try:
+            # 获取embeddings
+            response = await asyncio.wait_for(
+                client.embeddings.create(
+                    model="text-embedding-3-small",
+                    input=[concept1, concept2]
+                ),
+                timeout=30.0  # 增加超时到30秒
+            )
+            
+            emb1 = np.array(response.data[0].embedding)
+            emb2 = np.array(response.data[1].embedding)
+            
+            # 计算余弦相似度
+            similarity = np.dot(emb1, emb2) / (np.linalg.norm(emb1) * np.linalg.norm(emb2))
+            
+            # 归一化到 [0, 1]
+            normalized = (similarity + 1) / 2
+            
+            print(f"[SUCCESS] 相似度计算: {concept1} <-> {concept2} = {normalized:.3f}")
+            return float(normalized)
+        
+        except asyncio.TimeoutError:
+            if attempt < max_retries:
+                print(f"[RETRY] 超时重试...（第{attempt + 1}次）")
+                await asyncio.sleep(0.5)
+            else:
+                print(f"[FALLBACK] 使用默认相似度0.75（超时）")
+                return 0.75
+        except Exception as e:
+            error_msg = str(e)
+            # 详细的错误分类
+            if "Connection error" in error_msg or "connection" in error_msg.lower():
+                if attempt < max_retries:
+                    print(f"[RETRY] 网络错误，重试...（第{attempt + 1}次）")
+                    await asyncio.sleep(1.0)  # 网络错误等待更长时间
+                else:
+                    print(f"[FALLBACK] 使用默认相似度0.75（网络问题）")
+                    return 0.75
+            elif "rate_limit" in error_msg.lower() or "429" in error_msg:
+                print(f"[FALLBACK] API速率限制，使用默认相似度0.75")
+                await asyncio.sleep(2.0)  # 速率限制等待2秒
+                return 0.75
+            elif "invalid" in error_msg.lower() or "key" in error_msg.lower():
+                print(f"[ERROR] API Key问题: {error_msg}")
+                return 0.75
+            else:
+                if attempt < max_retries:
+                    print(f"[RETRY] 未知错误，重试: {error_msg}（第{attempt + 1}次）")
+                    await asyncio.sleep(0.5)
+                else:
+                    print(f"[FALLBACK] 使用默认相似度0.75（{error_msg}）")
+                    return 0.75
+    
+    return 0.75
+
+
+async def compute_similarities_batch(concepts: list[str], reference_concept: str) -> list[float]:
+    """
+    批量计算多个概念与参考概念的相似度（减少API调用）
+    
+    Args:
+        concepts: 待计算的概念列表
+        reference_concept: 参考概念
+        
+    Returns:
+        相似度列表，与concepts顺序对应
+    """
+    if not concepts:
+        return []
+    
+    # 如果只有少量概念，逐个计算
+    if len(concepts) <= 3:
+        results = []
+        for concept in concepts:
+            sim = await compute_similarity(concept, reference_concept)
+            results.append(sim)
+        return results
+    
+    # 批量计算：减少请求次数
+    client = get_embedding_client()
+    if not client:
+        print("[WARNING] Embedding客户端未初始化，返回默认相似度")
+        return [0.75] * len(concepts)
+    
     try:
-        # 获取embeddings
+        # 一次性获取所有概念的embedding
+        all_texts = [reference_concept] + concepts
+        
+        print(f"[INFO] 批量计算{len(concepts)}个概念的相似度（超时60秒）...")
+        
         response = await asyncio.wait_for(
             client.embeddings.create(
                 model="text-embedding-3-small",
-                input=[concept1, concept2]
+                input=all_texts
             ),
-            timeout=10.0
+            timeout=60.0  # 增加批量计算超时到60秒
         )
         
-        emb1 = np.array(response.data[0].embedding)
-        emb2 = np.array(response.data[1].embedding)
+        # 参考概念的embedding
+        ref_emb = np.array(response.data[0].embedding)
         
-        # 计算余弦相似度
-        similarity = np.dot(emb1, emb2) / (np.linalg.norm(emb1) * np.linalg.norm(emb2))
+        # 计算所有相似度
+        similarities = []
+        for i in range(len(concepts)):
+            concept_emb = np.array(response.data[i + 1].embedding)
+            similarity = np.dot(ref_emb, concept_emb) / (np.linalg.norm(ref_emb) * np.linalg.norm(concept_emb))
+            normalized = (similarity + 1) / 2
+            similarities.append(float(normalized))
         
-        # 归一化到 [0, 1]
-        normalized = (similarity + 1) / 2
+        print(f"[SUCCESS] 批量相似度计算完成: 平均相似度 = {np.mean(similarities):.3f}")
+        return similarities
         
-        print(f"[SUCCESS] 相似度计算: {concept1} <-> {concept2} = {normalized:.3f}")
-        return float(normalized)
-    
     except asyncio.TimeoutError:
-        print(f"[WARNING] 相似度计算超时")
-        return 0.75
+        print(f"[WARNING] 批量相似度计算超时（60秒），回退到逐个计算")
+        # 回退到逐个计算
+        results = []
+        for concept in concepts:
+            sim = await compute_similarity(concept, reference_concept)
+            results.append(sim)
+        return results
     except Exception as e:
-        print(f"[WARNING] 相似度计算失败: {str(e)}")
-        return 0.75
+        print(f"[WARNING] 批量相似度计算失败: {type(e).__name__}: {str(e)}，回退到逐个计算")
+        # 回退到逐个计算
+        results = []
+        for concept in concepts:
+            sim = await compute_similarity(concept, reference_concept)
+            results.append(sim)
+        return results
 
 
 async def compute_credibility(
     concept: str,
     parent_concept: str,
-    has_wikipedia: bool = False
+    has_wikipedia: bool = False,
+    similarity: float = None  # 新增：直接传入已计算的相似度
 ) -> float:
     """
     计算节点可信度
@@ -275,6 +396,7 @@ async def compute_credibility(
         concept: 当前概念
         parent_concept: 父概念
         has_wikipedia: 是否有Wikipedia定义
+        similarity: 已计算的相似度（可选，如果提供则不重新计算）
         
     Returns:
         可信度分数 [0, 1]
@@ -282,8 +404,9 @@ async def compute_credibility(
     # 基础可信度
     base = 0.95 if has_wikipedia else 0.70
     
-    # 计算语义相似度
-    similarity = await compute_similarity(concept, parent_concept)
+    # 使用已有相似度或重新计算
+    if similarity is None:
+        similarity = await compute_similarity(concept, parent_concept)
     
     # 动态可信度
     credibility = base * (0.7 + 0.3 * similarity)

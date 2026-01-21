@@ -30,11 +30,24 @@ const App: React.FC = () => {
     wiki_url: string | null;
     related_papers: ArxivPaper[];
   } | null>(null);
+  
+  // 新增：功能模式选择
+  const [searchMode, setSearchMode] = useState<'auto' | 'disciplined' | 'bridge'>('auto');
+  const [disciplines, setDisciplines] = useState<string[]>([]);
+  const [bridgeConcepts, setBridgeConcepts] = useState<string[]>(['', '']);
 
   const handleSearch = async () => {
-    if (!concept.trim()) {
+    if (!concept.trim() && searchMode !== 'bridge') {
       message.warning('请输入概念名称');
       return;
+    }
+    
+    if (searchMode === 'bridge') {
+      const validConcepts = bridgeConcepts.filter(c => c.trim());
+      if (validConcepts.length < 2) {
+        message.warning('桥接发现至少需要2个概念');
+        return;
+      }
     }
     
     setLoading(true);
@@ -42,7 +55,26 @@ const App: React.FC = () => {
     setExpandedNodes(new Set());
     
     try {
-      const response = await conceptAPI.discover(concept);
+      let response;
+      
+      // 根据模式调用不同API
+      if (searchMode === 'disciplined') {
+        // 功能2：限定学科发现
+        if (disciplines.length === 0) {
+          message.warning('请至少选择一个学科');
+          setLoading(false);
+          return;
+        }
+        response = await conceptAPI.discoverDisciplined(concept, disciplines);
+      } else if (searchMode === 'bridge') {
+        // 功能3：桥接概念发现
+        const validConcepts = bridgeConcepts.filter(c => c.trim());
+        response = await conceptAPI.discoverBridge(validConcepts);
+      } else {
+        // 功能1：自动跨学科发现
+        response = await conceptAPI.discover(concept);
+      }
+      
       if (response.status === 'success') {
         // 确保所有节点定义都被截断
         const processedNodes = response.data.nodes.map((node, index) => ({
@@ -195,6 +227,10 @@ const App: React.FC = () => {
     setExpandedNodes(new Set());
     setSearchArxivPapers([]);
     setConceptDetail(null);
+    // 重置新增状态
+    setSearchMode('auto');
+    setDisciplines([]);
+    setBridgeConcepts(['', '']);
   };
 
   return (
@@ -266,9 +302,87 @@ const App: React.FC = () => {
             )}
           </div>
         )}
+        
+        {/* 功能模式选择 */}
+        <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'center', gap: '12px' }}>
+          <Button 
+            type={searchMode === 'auto' ? 'primary' : 'default'}
+            onClick={() => setSearchMode('auto')}
+            style={{ borderRadius: '20px' }}
+          >
+            🔍 自动跨学科
+          </Button>
+          <Button 
+            type={searchMode === 'disciplined' ? 'primary' : 'default'}
+            onClick={() => setSearchMode('disciplined')}
+            style={{ borderRadius: '20px' }}
+          >
+            🎯 限定学科
+          </Button>
+          <Button 
+            type={searchMode === 'bridge' ? 'primary' : 'default'}
+            onClick={() => setSearchMode('bridge')}
+            style={{ borderRadius: '20px' }}
+          >
+            🌉 桥接发现
+          </Button>
+        </div>
+        
+        {/* 根据模式显示不同的输入 */}
+        {searchMode === 'disciplined' && (
+          <div style={{ marginBottom: '16px' }}>
+            <Space wrap>
+              <span style={{ color: '#666' }}>限定学科：</span>
+              {['计算机科学', '物理学', '数学', '生物学', '心理学', '经济学', '社会学'].map(d => (
+                <Tag.CheckableTag
+                  key={d}
+                  checked={disciplines.includes(d)}
+                  onChange={(checked) => {
+                    setDisciplines(checked 
+                      ? [...disciplines, d] 
+                      : disciplines.filter(x => x !== d)
+                    );
+                  }}
+                >
+                  {d}
+                </Tag.CheckableTag>
+              ))}
+            </Space>
+          </div>
+        )}
+        
+        {searchMode === 'bridge' && (
+          <div style={{ marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '8px', maxWidth: '600px', margin: '0 auto 16px' }}>
+            {bridgeConcepts.map((c, idx) => (
+              <Input
+                key={idx}
+                placeholder={`概念 ${idx + 1}`}
+                value={c}
+                onChange={(e) => {
+                  const newConcepts = [...bridgeConcepts];
+                  newConcepts[idx] = e.target.value;
+                  setBridgeConcepts(newConcepts);
+                }}
+                size="large"
+              />
+            ))}
+            <Button 
+              onClick={() => setBridgeConcepts([...bridgeConcepts, ''])}
+              style={{ alignSelf: 'flex-start' }}
+            >
+              + 添加概念
+            </Button>
+          </div>
+        )}
+        
+        {searchMode !== 'bridge' && (
         <Space.Compact style={{ width: '100%', maxWidth: '600px' }}>
           <Input
-            placeholder="输入概念（如：熵、神经网络、量子纠缠）"
+            placeholder={
+              searchMode === 'auto' 
+                ? "输入概念（如：熵、神经网络、量子纠缠）"
+                : "输入概念，将在限定学科中搜索"
+            }
             value={concept}
             onChange={(e) => setConcept(e.target.value)}
             onPressEnter={handleSearch}
@@ -293,6 +407,21 @@ const App: React.FC = () => {
             重置
           </Button>
         </Space.Compact>
+        )}
+        
+        {searchMode === 'bridge' && (
+        <Button
+          type="primary"
+          size="large"
+          icon={<SearchOutlined />}
+          onClick={handleSearch}
+          loading={loading}
+          style={{ display: 'block', margin: '0 auto' }}
+        >
+          发现桥接概念
+        </Button>
+        )}
+        
         {searchHistory.length > 0 && nodes.length === 0 && (
           <div style={{ 
             marginTop: '20px',

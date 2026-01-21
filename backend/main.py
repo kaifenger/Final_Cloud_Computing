@@ -156,5 +156,6 @@ if __name__ == "__main__":
         host=getattr(settings, 'HOST', '0.0.0.0'),
         port=getattr(settings, 'PORT', 8000),
         reload=True,
+        reload_excludes=["*.pyc", "__pycache__", "*.log", "test_*.py"],  # 排除不必要的重载
         log_level="info"
     )

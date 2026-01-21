@@ -73,24 +73,26 @@ async def generate_brief_summary(concept: str, wiki_definition: str = "") -> str
         return f"{concept}是一个重要的跨学科概念。"
     
     try:
-        prompt = f"""请为概念"{concept}"生成一句话简介（30-80字），要求：
-1. 简洁精准，突出核心特征
-2. 通俗易懂，适合普通读者
-3. 不要使用"是指"、"是一种"等开头
+        prompt = f"""请为学术概念"{concept}"生成一句完整的简介说明（40-100字），要求：
+1. 必须是完整的句子，有明确的主谓宾结构
+2. 简洁精准，突出核心特征和应用价值
+3. 通俗易懂，适合非专业读者理解
+4. 不要使用"是指"、"是一种"等生硬开头
+5. 确保句子完整，不要中途截断
 
 {f'参考定义：{wiki_definition[:200]}' if wiki_definition else ''}
 
-直接输出简介内容，不要任何解释或标点外的其他内容。"""
+直接输出完整的简介句子，不要引号和其他标点。"""
 
         response = await asyncio.wait_for(
             client.chat.completions.create(
                 model=os.getenv("LLM_MODEL", "google/gemini-3-flash-preview"),
                 messages=[
-                    {"role": "system", "content": "你是一个学术概念解释专家，擅长用简洁的语言解释复杂概念。"},
+                    {"role": "system", "content": "你是一个学术概念解释专家，擅长用简洁的语言解释复杂概念。务必输出完整句子，不要截断。"},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.3,
-                max_tokens=200,
+                max_tokens=300,
                 extra_body={"reasoning": {"enabled": True}}
             ),
             timeout=15.0
@@ -98,7 +100,15 @@ async def generate_brief_summary(concept: str, wiki_definition: str = "") -> str
         
         if response and response.choices:
             summary = response.choices[0].message.content.strip()
+            # 清理各种不需要的标记和格式
             summary = summary.strip('"\'""\'\'')
+            # 移除可能的草稿标记
+            summary = summary.replace("*Draft*:", "").replace("*Draft 2*:", "").replace("*Draft 1*:", "")
+            summary = summary.replace("Draft:", "").replace("Draft 2:", "").replace("Draft 1:", "")
+            # 移除星号
+            summary = summary.replace("*", "").strip()
+            # 如果以"："或":"开头，移除它
+            summary = summary.lstrip("：:").strip()
             print(f"[SUCCESS] LLM生成简介: {concept} -> {summary[:50]}...")
             return summary
     except asyncio.TimeoutError:
@@ -349,22 +359,26 @@ async def get_real_discovery_result(concept: str, max_concepts: int = 5) -> dict
     if use_real_llm:
         # 使用真实LLM生成相关概念
         try:
-            # 生成2倍候选概念
+            # 固定生成20个候选概念，确保有足够样本进行相似度筛选
             candidates = await generate_related_concepts(
                 parent_concept=concept,
                 existing_concepts=[concept],
-                max_count=max_concepts * 2
+                max_count=20  # 固定生成20个，后续通过相似度筛选
             )
             
             if candidates:
                 print(f"[INFO] LLM生成了{len(candidates)}个候选概念")
                 
-                # 计算每个候选的语义相似度
-                candidates_with_similarity = []
-                print("[INFO] 使用语义相似度计算（标准模式）")
+                # 批量计算语义相似度
+                print("[INFO] 批量计算语义相似度...")
+                from backend.api.real_node_generator import compute_similarities_batch
                 
-                for candidate in candidates:
-                    similarity = await compute_similarity(candidate["name"], concept)
+                concept_names = [c["name"] for c in candidates]
+                similarities = await compute_similarities_batch(concept_names, concept)
+                
+                # 组合候选概念和相似度
+                candidates_with_similarity = []
+                for candidate, similarity in zip(candidates, similarities):
                     candidates_with_similarity.append({
                         **candidate,
                         "similarity": similarity
@@ -404,15 +418,17 @@ async def get_real_discovery_result(concept: str, max_concepts: int = 5) -> dict
                 for idx, candidate in enumerate(top_candidates, 1):
                     term = candidate["name"]
                     discipline = candidate["discipline"]
+                    similarity_score = candidate["similarity"]  # 使用已计算的相似度
                     
                     # 获取Wikipedia定义
                     term_wiki = await get_wikipedia_definition(term, max_length=500)
                     
-                    # 计算动态可信度
+                    # 计算动态可信度（传入已有的相似度，避免重复计算）
                     credibility = await compute_credibility(
                         concept=term,
                         parent_concept=concept,
-                        has_wikipedia=term_wiki["exists"]
+                        has_wikipedia=term_wiki["exists"],
+                        similarity=similarity_score  # 传入已计算的相似度
                     )
                     
                     # 生成简介
@@ -425,7 +441,7 @@ async def get_real_discovery_result(concept: str, max_concepts: int = 5) -> dict
                         "label": term,
                         "discipline": discipline,
                         "definition": term_wiki["definition"] if term_wiki["exists"] else f"{term}是与{concept}相关的学术概念。",
-                        "similarity": round(candidate["similarity"], 3),
+                        "similarity": round(similarity_score, 3),  # 使用已有的相似度
                         "brief_summary": brief_summary,
                         "credibility": round(credibility, 3),
                         "source": "Wikipedia" if term_wiki["exists"] else "LLM",
@@ -638,10 +654,14 @@ async def discover_concepts_disciplined(request: DiscoverDisciplinedRequest):
             data={"message": "未生成任何概念，请检查学科设置"}
         )
     
-    # 3. 计算相似度并排序
+    # 3. 批量计算相似度并排序
+    from backend.api.real_node_generator import compute_similarities_batch
+    
+    concept_names = [c["name"] for c in candidates]
+    similarities = await compute_similarities_batch(concept_names, request.concept)
+    
     candidates_with_similarity = []
-    for candidate in candidates:
-        similarity = await compute_similarity(candidate["name"], request.concept)
+    for candidate, similarity in zip(candidates, similarities):
         candidates_with_similarity.append({
             **candidate,
             "similarity": similarity
@@ -654,12 +674,14 @@ async def discover_concepts_disciplined(request: DiscoverDisciplinedRequest):
     for idx, candidate in enumerate(top_candidates, 1):
         term = candidate["name"]
         discipline = candidate["discipline"]
+        similarity_score = candidate["similarity"]  # 使用已计算的相似度
         
         term_wiki = await get_wikipedia_definition(term, max_length=500)
         credibility = await compute_credibility(
             concept=term,
             parent_concept=request.concept,
-            has_wikipedia=term_wiki["exists"]
+            has_wikipedia=term_wiki["exists"],
+            similarity=similarity_score  # 传入已计算的相似度
         )
         brief_summary = await generate_brief_summary(term, term_wiki.get("definition", ""))
         
@@ -672,7 +694,7 @@ async def discover_concepts_disciplined(request: DiscoverDisciplinedRequest):
             "definition": term_wiki["definition"] if term_wiki["exists"] else f"{term}是与{request.concept}相关的学术概念。",
             "brief_summary": brief_summary,
             "credibility": round(credibility, 3),
-            "similarity": round(candidate["similarity"], 3),
+            "similarity": round(similarity_score, 3),  # 使用已有的相似度
             "source": "Wikipedia" if term_wiki["exists"] else "LLM",
             "wiki_url": term_wiki.get("url", ""),
             "depth": 1
@@ -886,13 +908,14 @@ async def expand_node(request: ExpandRequest):
         
         print(f"[INFO] LLM生成了{len(candidates)}个候选概念")
         
-        # 步骤2: 计算每个候选概念的语义相似度
+        # 步骤2: 批量计算语义相似度
+        from backend.api.real_node_generator import compute_similarities_batch
+        
+        concept_names = [c["name"] for c in candidates]
+        similarities = await compute_similarities_batch(concept_names, request.node_label)
+        
         candidates_with_similarity = []
-        for candidate in candidates:
-            similarity = await compute_similarity(
-                candidate["name"],
-                request.node_label
-            )
+        for candidate, similarity in zip(candidates, similarities):
             candidates_with_similarity.append({
                 **candidate,
                 "similarity": similarity
@@ -1057,7 +1080,7 @@ async def ai_chat(request: dict):
         
         response = await asyncio.wait_for(
             client.chat.completions.create(
-                model=os.getenv("LLM_MODEL", "google/gemini-2.0-flash-001"),
+                model=os.getenv("LLM_MODEL", "google/gemini-3-flash-preview"),
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": question}

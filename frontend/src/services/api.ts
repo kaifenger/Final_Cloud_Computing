@@ -89,7 +89,7 @@ export interface ArxivSearchResponse {
 
 export const conceptAPI = {
   /**
-   * 概念挖掘接口
+   * 功能1：自动跨学科发现
    */
   discover: async (concept: string, disciplines?: string[]) => {
     const response = await apiClient.post<DiscoverResponse>('/discover', {
@@ -97,6 +97,29 @@ export const conceptAPI = {
       disciplines,
       depth: 2,
       max_concepts: 30
+    });
+    return response.data;
+  },
+
+  /**
+   * 功能2：限定学科的跨学科发现
+   */
+  discoverDisciplined: async (concept: string, disciplines: string[]) => {
+    const response = await apiClient.post<DiscoverResponse>('/discover/disciplined', {
+      concept,
+      disciplines,
+      max_concepts: 20
+    });
+    return response.data;
+  },
+
+  /**
+   * 功能3：桥接概念发现
+   */
+  discoverBridge: async (concepts: string[], maxBridges: number = 5) => {
+    const response = await apiClient.post<DiscoverResponse>('/discover/bridge', {
+      concepts,
+      max_bridges: maxBridges
     });
     return response.data;
   },

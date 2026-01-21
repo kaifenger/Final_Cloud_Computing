@@ -130,30 +130,10 @@ Hebbian学习|生物学|学习规则|同步激活的神经元连接增强
                             "cross_principle": parts[3].strip()
                         })
             
-            # 启用学术概念过滤
+            # 学术过滤已禁用
             if concepts:
-                # 导入is_academic_concept函数
-                try:
-                    from backend.api.real_node_generator import is_academic_concept
-                    
-                    filtered_concepts = []
-                    for concept in concepts:
-                        is_academic = await is_academic_concept(concept["name"])
-                        if is_academic:
-                            filtered_concepts.append(concept)
-                        else:
-                            print(f"[FILTER] 非学术概念已过滤: {concept['name']}")
-                    
-                    if filtered_concepts:
-                        print(f"[SUCCESS] 功能2生成了{len(filtered_concepts)}个概念（限定学科：{', '.join(disciplines)}，学术过滤后）")
-                        return filtered_concepts
-                    else:
-                        print(f"[WARNING] 学术过滤后无概念剩余，返回原始结果")
-                        return concepts
-                except ImportError:
-                    print(f"[WARNING] 无法导入is_academic_concept，跳过学术过滤")
-                    print(f"[SUCCESS] 功能2生成了{len(concepts)}个概念（限定学科：{', '.join(disciplines)}）")
-                    return concepts
+                print(f"[SUCCESS] 功能2生成了{len(concepts)}个概念（限定学科：{', '.join(disciplines)}）")
+                return concepts
             
             return concepts
     
