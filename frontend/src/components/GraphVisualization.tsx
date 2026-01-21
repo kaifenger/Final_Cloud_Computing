@@ -11,14 +11,14 @@ interface GraphProps {
 
 const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick }) => {
   const svgRef = useRef<SVGSVGElement>(null);
-  const [zoomLevel, setZoomLevel] = useState(1);
+  const [zoomLevel, setZoomLevel] = useState(0.65);
   const zoomRef = useRef<any>(null);
 
   useEffect(() => {
     if (!svgRef.current || nodes.length === 0) return;
 
     const width = 1200;
-    const height = 800;
+    const height = 600;  // 调整高度以匹配实际画布
 
     // 清空之前的内容
     d3.select(svgRef.current).selectAll('*').remove();
@@ -41,6 +41,12 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
 
     zoomRef.current = zoom;
     svg.call(zoom as any);
+    
+    // 设置初始缩放为65%，并将画布中心对齐到视口中心
+    const initialScale = 0.65;
+    const translateX = (width * (1 - initialScale)) / 2;
+    const translateY = (height * (1 - initialScale)) / 2;
+    svg.call(zoom.transform as any, d3.zoomIdentity.translate(translateX, translateY).scale(initialScale));
 
     // 学科颜色映射
     const colorScale = d3.scaleOrdinal<string>()
@@ -54,6 +60,43 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
     console.log('[Graph] 总节点数:', nodes.length);
     console.log('[Graph] 总边数:', edges.length);
     console.log('[Graph] 边列表:', edges.map((e: any) => `${e.source} -> ${e.target}`));
+    console.log('[Graph] 边详细信息 - 完整数据:', edges);
+    console.log('[Graph] 第一条边的完整数据:', edges[0]);
+    console.log('[Graph] 第一条边的reasoning字段:', edges[0]?.reasoning);
+    console.log('[Graph] 节点ID列表:', nodes.map((n: any) => n.id));
+    
+    // 检查第一条边的source和target具体值
+    if (edges.length > 0) {
+      const firstEdge = edges[0];
+      const sourceId = typeof firstEdge.source === 'object' ? (firstEdge.source as any).id : firstEdge.source;
+      const targetId = typeof firstEdge.target === 'object' ? (firstEdge.target as any).id : firstEdge.target;
+      console.log('[Graph] 第一条边 - sourceId:', sourceId, 'targetId:', targetId);
+    }
+    
+    // 检查边的source和target是否存在于节点中
+    const nodeIds = new Set(nodes.map((n: any) => n.id));
+    console.log('[Graph] 所有节点ID:', JSON.stringify(Array.from(nodeIds)));
+    
+    const edgesValid = edges.every((e: any) => {
+      // 边的source/target可能是字符串ID或对象引用，需要提取ID
+      const sourceId = typeof e.source === 'object' ? (e.source as any).id : e.source;
+      const targetId = typeof e.target === 'object' ? (e.target as any).id : e.target;
+      const sourceExists = nodeIds.has(sourceId);
+      const targetExists = nodeIds.has(targetId);
+      
+      if (!sourceExists || !targetExists) {
+        console.error('[Graph] 边引用了不存在的节点:',
+          'sourceId=' + sourceId, 'sourceExists=' + sourceExists,
+          'targetId=' + targetId, 'targetExists=' + targetExists);
+        return false;
+      }
+      return true;
+    });
+    
+    if (!edgesValid) {
+      console.error('[Graph] 发现无效的边，跳过渲染');
+      return;
+    }
     
     // 为每个节点计算目标半径（根据深度）
     const getTargetRadius = (node: any) => {
@@ -62,22 +105,39 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
       return 150 * depth; // 每一层距离中心150px
     };
 
+    // 为子节点设置初始角度，使其围绕根节点均匀分布
+    const childNodes = nodes.filter((n: any) => n.id !== rootNode.id);
+    childNodes.forEach((node: any, index: number) => {
+      const angle = (index / childNodes.length) * 2 * Math.PI;
+      const radius = 150;
+      node.x = width / 2 + radius * Math.cos(angle);
+      node.y = (height / 2 - 190) + radius * Math.sin(angle);
+    });
+    
     // 力导向图模拟 - 使用径向布局
     const simulation = d3.forceSimulation(nodes as any)
       .force('link', d3.forceLink(edges)
         .id((d: any) => d.id)
         .distance((d: any) => {
-          // 根据层级调整边长度
+          // 缩短边长度，让子节点离根节点更近
           const sourceDepth = (d.source as any).depth || 0;
           const targetDepth = (d.target as any).depth || 0;
-          return 100 + Math.abs(targetDepth - sourceDepth) * 50;
+          return 60 + Math.abs(targetDepth - sourceDepth) * 30;
         })
         .strength(1.2))
-      .force('charge', d3.forceManyBody().strength(-400))
-      .force('center', d3.forceCenter(width / 2, height / 2))
+      .force('charge', d3.forceManyBody().strength(-300))
+      .force('center', d3.forceCenter(width / 2, height / 2 - 190))  // 调整中心点
       .force('collision', d3.forceCollide().radius(40))
-      // 径向力：将节点推向各自层级的圆环上
-      .force('radial', d3.forceRadial((d: any) => getTargetRadius(d), width / 2, height / 2).strength(0.8));
+      // 径向力：将节点推向各自层级的圆环上，增加强度
+      .force('radial', d3.forceRadial((d: any) => getTargetRadius(d), width / 2, height / 2 - 190).strength(1.0));
+
+    // 固定根节点在画布中心（稍微靠上）
+    simulation.nodes().forEach((node: any) => {
+      if (node.id === rootNode.id) {
+        node.fx = width / 2;
+        node.fy = height / 2 - 190;  // 向上偏移190px
+      }
+    });
 
     // 绘制边（每条边包含line和title）
     const linkGroup = g.append('g')
@@ -98,8 +158,17 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
     // 为连线添加tooltip显示关联解释
     linkGroup.append('title')
       .text((d: any) => {
-        const reasoning = d.reasoning || `${d.source} 与 ${d.target} 的关联`;
-        return reasoning;
+        const sourceLabel = typeof d.source === 'object' ? d.source.label : d.source;
+        const targetLabel = typeof d.target === 'object' ? d.target.label : d.target;
+        console.log('[Tooltip] Edge:', sourceLabel, '->', targetLabel, 'reasoning:', d.reasoning);
+        
+        // 直接返回reasoning字段，如果为空才使用默认文本
+        if (d.reasoning && d.reasoning.trim()) {
+          // 在tooltip中同时显示边的两端节点和关联描述
+          return `${sourceLabel} → ${targetLabel}\n\n${d.reasoning}`;
+        }
+        // 如果没有reasoning，使用默认文本
+        return `${sourceLabel} 与 ${targetLabel} 存在概念上的关联`;
       });
 
     // 绘制节点组
@@ -167,13 +236,30 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
         }
       });
 
-    // 节点标签（增强样式）
+    // 节点标签（根节点居中显示，子节点显示在右侧）
     nodeGroup.append('text')
       .text((d) => d.label)
       .attr('font-size', 13)
       .attr('font-weight', 600)
-      .attr('dx', (d) => (d.credibility ? 10 + d.credibility * 8 : 15) + 8)
-      .attr('dy', 4)
+      .attr('dx', (d: any) => {
+        // 根节点文本居中
+        const depth = d.depth || 0;
+        if (depth === 0) return 0;
+        // 子节点文本显示在右侧
+        return (d.credibility ? 10 + d.credibility * 8 : 15) + 8;
+      })
+      .attr('dy', (d: any) => {
+        // 根节点文本垂直居中
+        const depth = d.depth || 0;
+        if (depth === 0) return 5;  // 垂直居中（稍微下移以视觉居中）
+        // 子节点文本位置
+        return 4;
+      })
+      .attr('text-anchor', (d: any) => {
+        // 根节点文本居中对齐
+        const depth = d.depth || 0;
+        return depth === 0 ? 'middle' : 'start';
+      })
       .attr('fill', '#333')
       .attr('pointer-events', 'none')
       .style('text-shadow', '0 2px 4px rgba(255, 255, 255, 0.8)');

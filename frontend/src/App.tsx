@@ -83,21 +83,14 @@ const App: React.FC = () => {
           depth: index === 0 ? 0 : 1  // 第一个节点是根节点，深度为0，其他为1
         }));
         
-        // 强制重建边：确保所有边都从根节点（第一个节点）出发
-        const rootNode = processedNodes[0];
-        const correctedEdges: ConceptEdge[] = processedNodes.slice(1).map((node, index) => ({
-          source: rootNode.id,
-          target: node.id,
-          relation: 'related_to',
-          weight: 0.8 - (index * 0.05),
-          reasoning: `${rootNode.label}与${node.label}在概念上存在关联`
-        }));
+        // 使用后端返回的边数据（包含LLM生成的reasoning）
+        const processedEdges: ConceptEdge[] = response.data.edges || [];
         
         console.log('初始搜索 - 节点列表:', processedNodes.map(n => ({ id: n.id, label: n.label, depth: n.depth })));
-        console.log('初始搜索 - 修正后边列表:', correctedEdges.map(e => ({ source: e.source, target: e.target })));
+        console.log('初始搜索 - 边列表:', processedEdges.map(e => ({ source: e.source, target: e.target, reasoning: e.reasoning })));
         
         setNodes(processedNodes);
-        setEdges(correctedEdges);
+        setEdges(processedEdges);
         
         // 保存arxiv论文信息
         if (response.data.metadata?.arxiv_papers) {
@@ -107,7 +100,7 @@ const App: React.FC = () => {
         }
         
         message.success({
-          content: `发现 ${processedNodes.length} 个相关概念，${correctedEdges.length} 个关联关系`,
+          content: `发现 ${processedNodes.length} 个相关概念，${processedEdges.length} 个关联关系`,
           duration: 3,
           icon: '🎉'
         });
@@ -223,14 +216,10 @@ const App: React.FC = () => {
     setNodes([]);
     setEdges([]);
     setSelectedNode(null);
-    setConcept('');
     setExpandedNodes(new Set());
     setSearchArxivPapers([]);
     setConceptDetail(null);
-    // 重置新增状态
-    setSearchMode('auto');
-    setDisciplines([]);
-    setBridgeConcepts(['', '']);
+    // 不重置搜索模式和输入框内容，只清空画布
   };
 
   return (
@@ -410,16 +399,25 @@ const App: React.FC = () => {
         )}
         
         {searchMode === 'bridge' && (
-        <Button
-          type="primary"
-          size="large"
-          icon={<SearchOutlined />}
-          onClick={handleSearch}
-          loading={loading}
-          style={{ display: 'block', margin: '0 auto' }}
-        >
-          发现桥接概念
-        </Button>
+        <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+          <Button
+            type="primary"
+            size="large"
+            icon={<SearchOutlined />}
+            onClick={handleSearch}
+            loading={loading}
+          >
+            搜索概念间的关联
+          </Button>
+          <Button
+            size="large"
+            icon={<ReloadOutlined />}
+            onClick={handleReset}
+            disabled={loading}
+          >
+            重置
+          </Button>
+        </div>
         )}
         
         {searchHistory.length > 0 && nodes.length === 0 && (

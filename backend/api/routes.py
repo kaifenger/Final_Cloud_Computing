@@ -419,6 +419,7 @@ async def get_real_discovery_result(concept: str, max_concepts: int = 5) -> dict
                     term = candidate["name"]
                     discipline = candidate["discipline"]
                     similarity_score = candidate["similarity"]  # 使用已计算的相似度
+                    cross_principle = candidate.get("cross_principle", "")  # 获取跨学科原理
                     
                     # 获取Wikipedia定义
                     term_wiki = await get_wikipedia_definition(term, max_length=500)
@@ -446,7 +447,8 @@ async def get_real_discovery_result(concept: str, max_concepts: int = 5) -> dict
                         "credibility": round(credibility, 3),
                         "source": "Wikipedia" if term_wiki["exists"] else "LLM",
                         "wiki_url": term_wiki.get("url", ""),
-                        "depth": 1
+                        "depth": 1,
+                        "cross_principle": cross_principle  # 保存跨学科原理
                     })
             else:
                 print("[WARNING] LLM未生成任何概念，使用预定义")
@@ -490,12 +492,23 @@ async def get_real_discovery_result(concept: str, max_concepts: int = 5) -> dict
     edges = []
     center_node = nodes[0]
     for node in nodes[1:]:
+        # 使用节点中保存的cross_principle作为reasoning
+        reasoning = node.get("cross_principle", "")
+        print(f"[DEBUG] 节点 {node['label']} 的 cross_principle: '{reasoning}'")
+        
+        if not reasoning or not reasoning.strip():
+            # 如果没有cross_principle，使用默认文本
+            reasoning = f"{center_node['label']}与{node['label']}相关（相似度: {node.get('similarity', 0.75):.2f}）"
+            print(f"[DEBUG] 使用默认reasoning: '{reasoning}'")
+        else:
+            print(f"[DEBUG] 使用LLM生成的reasoning: '{reasoning}'")
+        
         edge = {
             "source": center_node["id"],
             "target": node["id"],
             "relation": "related_to",
             "weight": round(node.get("similarity", 0.75) * 0.9 + 0.1, 2),  # 基于相似度的权重
-            "reasoning": f"{center_node['label']}与{node['label']}相关（相似度: {node.get('similarity', 0.75):.2f}）"
+            "reasoning": reasoning
         }
         edges.append(edge)
     
