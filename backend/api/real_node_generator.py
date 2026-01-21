@@ -68,38 +68,61 @@ async def generate_related_concepts(
         print("[WARNING] LLM客户端未初始化，使用预定义概念")
         return _get_fallback_concepts(parent_concept)
     
-    # 构建提示词
+    # 构建跨学科提示词
     existing_str = "、".join(existing_concepts) if existing_concepts else "无"
-    prompt = f"""请为概念"{parent_concept}"生成{max_count}个相关的学术概念。
+    prompt = f"""你是一个跨学科知识挖掘专家。请为概念"{parent_concept}"挖掘{max_count}个跨领域的相关概念。
 
-要求：
-1. 每个概念必须是真实存在的学术概念
-2. 与"{parent_concept}"有明确的学术关联
-3. 不要包含已存在的概念：{existing_str}
-4. 覆盖不同的关系类型：理论基础、方法论、应用领域、子领域等
+【核心任务】发现跨学科的"远亲概念" - 不同领域中原理相通的概念
 
-输出格式（每行一个概念）：
-概念名|学科|关系类型
+【跨学科搜索策略】
+必须从以下不同领域寻找概念（每个领域至少1个）：
+1. 数学/统计学：寻找数学本质、理论基础
+2. 物理学：寻找物理类比、能量/信息原理
+3. 生物学/神经科学：寻找仿生学启发、演化机制
+4. 计算机科学：寻找算法实现、工程应用
+5. 社会学/经济学：寻找群体行为、博弈模型
+6. 其他交叉学科：心理学、语言学、复杂系统等
+
+【远亲概念判定标准】
+✅ 好的远亲概念（必须满足至少一条）：
+- 数学形式相同但应用领域不同（如：熵在热力学vs信息论）
+- 底层原理一致（如：神经网络vs生物神经元、PageRank vs随机游走）
+- 历史启发关系（如：遗传算法vs达尔文进化论）
+- 结构同构（如：社交网络vs蛋白质网络）
+
+❌ 避免的表面关联：
+- 仅仅名字相似（如："网络"在计算机网络vs神经网络）
+- 单纯的应用关系（如：机器学习用于医疗诊断）
+
+【约束条件】
+- 不要包含已存在的概念：{existing_str}
+- 每个概念必须来自不同学科（避免扎堆）
+- 必须解释跨学科关联的底层原理
+
+【输出格式】（每行一个概念）
+概念名|学科|关系类型|跨学科原理
 
 示例：
-机器学习|计算机科学|sub_field
-神经网络|人工智能|foundation
-监督学习|方法论|methodology
+神经网络|生物学|bio_inspired|模拟生物神经元的突触连接和激活传播机制
+信息熵|物理学|mathematical_analogy|与热力学熵数学形式完全一致(H=-Σp·log(p))
+PageRank算法|图论|structural_isomorphism|本质是马尔可夫链的平稳分布求解
+遗传算法|进化生物学|evolutionary_mechanism|复制达尔文的变异-选择-遗传进化过程
 
-请直接输出{max_count}个概念，不要任何解释："""
+请直接输出{max_count}个跨学科概念，不要解释："""
 
     try:
         response = await asyncio.wait_for(
             client.chat.completions.create(
-                model=os.getenv("LLM_MODEL", "google/gemini-2.0-flash-001"),
+                model=os.getenv("LLM_MODEL", "google/gemini-3-flash-preview"),
                 messages=[
-                    {"role": "system", "content": "你是一个专业的学术概念生成助手，擅长识别概念间的学术关联。"},
+                    {"role": "system", "content": "你是跨学科知识挖掘专家，擅长发现不同领域间的深层原理关联和结构同构性。你的核心能力是识别'远亲概念' - 那些表面看起来毫不相关，但底层数学、物理或信息论原理完全一致的概念。"},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.3,
-                max_tokens=500
+                temperature=0.4,
+                max_tokens=800,
+                extra_body={"reasoning": {"enabled": True}}
             ),
-            timeout=15.0
+            timeout=20.0
         )
         
         if response and response.choices:
@@ -110,16 +133,51 @@ async def generate_related_concepts(
                 line = line.strip()
                 if '|' in line:
                     parts = line.split('|')
-                    if len(parts) >= 3:
+                    if len(parts) >= 4:
+                        # 新格式：概念名|学科|关系类型|跨学科原理
+                        # 去除概念名前的序号（如"1. 反向传播" -> "反向传播"）
+                        concept_name = parts[0].strip()
+                        # 移除开头的数字+点号模式
+                        import re
+                        concept_name = re.sub(r'^\d+\.\s*', '', concept_name)
+                        
                         concepts.append({
-                            "name": parts[0].strip(),
+                            "name": concept_name,
                             "discipline": parts[1].strip(),
-                            "relation": parts[2].strip()
+                            "relation": parts[2].strip(),
+                            "cross_principle": parts[3].strip()
+                        })
+                    elif len(parts) >= 3:
+                        # 兼容旧格式：概念名|学科|关系类型
+                        concept_name = parts[0].strip()
+                        import re
+                        concept_name = re.sub(r'^\d+\.\s*', '', concept_name)
+                        
+                        concepts.append({
+                            "name": concept_name,
+                            "discipline": parts[1].strip(),
+                            "relation": parts[2].strip(),
+                            "cross_principle": "学科交叉概念"
                         })
             
             if concepts:
                 print(f"[SUCCESS] LLM生成了{len(concepts)}个相关概念")
-                return concepts[:max_count]
+                
+                # 启用学术概念过滤
+                filtered_concepts = []
+                for concept in concepts:
+                    is_academic = await is_academic_concept(concept["name"])
+                    if is_academic:
+                        filtered_concepts.append(concept)
+                    else:
+                        print(f"[FILTER] 非学术概念已过滤: {concept['name']}")
+                
+                if filtered_concepts:
+                    print(f"[SUCCESS] 学术过滤后剩余{len(filtered_concepts)}个概念")
+                    return filtered_concepts[:max_count]
+                else:
+                    print(f"[WARNING] 学术过滤后无概念剩余，返回原始结果")
+                    return concepts[:max_count]
     
     except asyncio.TimeoutError:
         print(f"[WARNING] LLM生成超时，使用预定义概念")
@@ -254,7 +312,7 @@ async def is_academic_concept(concept: str) -> bool:
     try:
         response = await asyncio.wait_for(
             client.chat.completions.create(
-                model=os.getenv("LLM_MODEL", "google/gemini-2.0-flash-001"),
+                model=os.getenv("LLM_MODEL", "google/gemini-3-flash-preview"),
                 messages=[
                     {
                         "role": "system",
@@ -266,7 +324,8 @@ async def is_academic_concept(concept: str) -> bool:
                     }
                 ],
                 temperature=0.1,
-                max_tokens=10
+                max_tokens=10,
+                extra_body={"reasoning": {"enabled": True}}
             ),
             timeout=5.0
         )

@@ -67,13 +67,14 @@ async def ai_chat(request: AIChatRequest):
         
         response = await asyncio.wait_for(
             client.chat.completions.create(
-                model=os.getenv("LLM_MODEL", "google/gemini-2.0-flash-001"),
+                model=os.getenv("LLM_MODEL", "google/gemini-3-flash-preview"),
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.5,
-                max_tokens=300
+                max_tokens=300,
+                extra_body={"reasoning": {"enabled": True}}
             ),
             timeout=30.0
         )

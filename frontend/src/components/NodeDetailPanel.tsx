@@ -172,13 +172,13 @@ const NodeDetailPanel: React.FC<NodeDetailPanelProps> = ({
 
       <Divider style={{ margin: '18px 0' }} />
 
-      {/* 4. 与搜索词的相关度 */}
+      {/* 4. 与搜索词的相关度 (使用similarity字段) */}
       <div style={{ marginBottom: '18px' }}>
         <div style={{ fontSize: '13px', color: '#999', marginBottom: '8px', fontWeight: '500' }}>
-          🎯 与搜索词的相关度
+          🎯 与搜索词的相关度 <Tag color="green" style={{ fontSize: '10px', marginLeft: '4px' }}>动态计算</Tag>
         </div>
         <Progress 
-          percent={Math.round(selectedNode.credibility * 100)} 
+          percent={Math.round(((selectedNode as any).similarity || selectedNode.credibility) * 100)} 
           status="active"
           strokeColor={{
             '0%': '#667eea',
@@ -186,6 +186,10 @@ const NodeDetailPanel: React.FC<NodeDetailPanelProps> = ({
           }}
           strokeWidth={12}
         />
+        <div style={{ fontSize: '11px', color: '#999', marginTop: '6px' }}>
+          相似度分数: {(((selectedNode as any).similarity || selectedNode.credibility) * 100).toFixed(1)}% | 
+          可信度: {(selectedNode.credibility * 100).toFixed(1)}%
+        </div>
       </div>
 
       <Divider style={{ margin: '18px 0' }} />
