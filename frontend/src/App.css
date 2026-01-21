@@ -45,7 +45,7 @@ body {
   background: linear-gradient(-45deg, #667eea, #764ba2, #f093fb, #4facfe);
   background-size: 400% 400%;
   animation: gradientShift 15s ease infinite;
-  padding: 20px;
+  padding: 10px;
   position: relative;
   overflow: hidden;
 }
@@ -66,15 +66,15 @@ body {
 .app-header {
   text-align: center;
   color: white;
-  margin-bottom: 40px;
+  margin-bottom: 20px;
   animation: slideInUp 0.8s ease-out;
   position: relative;
   z-index: 1;
 }
 
 .app-header h1 {
-  font-size: 56px;
-  margin-bottom: 10px;
+  font-size: 42px;
+  margin-bottom: 8px;
   font-weight: 700;
   text-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
   letter-spacing: -1px;
@@ -87,7 +87,7 @@ body {
 }
 
 .subtitle {
-  font-size: 20px;
+  font-size: 16px;
   opacity: 0.95;
   font-weight: 300;
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
@@ -97,7 +97,7 @@ body {
 .search-section {
   display: flex;
   justify-content: center;
-  margin-bottom: 40px;
+  margin-bottom: 20px;
   animation: slideInUp 0.8s ease-out 0.2s both;
   position: relative;
   z-index: 1;
@@ -163,12 +163,12 @@ body {
   flex: 1;
   background: rgba(255, 255, 255, 0.95);
   border-radius: 16px;
-  padding: 24px;
+  padding: 16px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
   backdrop-filter: blur(10px);
   border: 1px solid rgba(255, 255, 255, 0.2);
   transition: all 0.3s ease;
-  min-height: 600px;
+  min-height: auto;
   position: relative;
   overflow: hidden;
 }

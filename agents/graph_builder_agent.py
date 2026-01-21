@@ -192,8 +192,10 @@ class GraphBuilderAgent:
             definition = concept.get('definition', concept_name)
             credibility = concept.get('credibility', 0.5)
             strength = concept.get('strength', 0.5)
-            reasoning = concept.get('reasoning', f"{source_concept}与{concept_name}相关")
-            relation_type = concept.get('relation_type', 'similar_to')
+            
+            # 优先使用cross_principle作为关联解释，然后是reasoning
+            reasoning = concept.get('cross_principle') or concept.get('reasoning', f"{source_concept}与{concept_name}相关")
+            relation_type = concept.get('relation_type') or concept.get('relation', 'similar_to')
             
             # 创建节点
             node_id = generate_node_id(concept_name, discipline)

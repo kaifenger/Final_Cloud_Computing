@@ -389,7 +389,7 @@ async def get_real_discovery_result(concept: str, max_concepts: int = 5) -> dict
                 print("[INFO] 按语义相似度排序")
                 
                 # 动态阈值筛选：保证3-9个节点
-                SIMILARITY_THRESHOLD = 0.62  # 基于测试数据分析的合理阈值
+                SIMILARITY_THRESHOLD = 0.65  # 只选择真正相似度高的概念
                 MIN_NODES = 3
                 MAX_NODES = min(9, max_concepts - 1)  # 不超过请求的max_concepts
                 
@@ -640,11 +640,11 @@ async def discover_concepts_disciplined(request: DiscoverDisciplinedRequest):
     nodes = [center_node]
     edges = []
     
-    # 2. LLM生成指定学科的概念
+    # 2. LLM生成指定学科的概念（强制生成20个候选）
     candidates = await generate_concepts_with_disciplines(
         parent_concept=request.concept,
         disciplines=request.disciplines,
-        max_count=request.max_concepts
+        max_count=20  # 强制生成20个候选概念
     )
     
     if not candidates:
@@ -653,6 +653,8 @@ async def discover_concepts_disciplined(request: DiscoverDisciplinedRequest):
             request_id=request_id,
             data={"message": "未生成任何概念，请检查学科设置"}
         )
+    
+    print(f"[INFO] LLM生成了{len(candidates)}个候选概念")
     
     # 3. 批量计算相似度并排序
     from backend.api.real_node_generator import compute_similarities_batch
@@ -667,8 +669,33 @@ async def discover_concepts_disciplined(request: DiscoverDisciplinedRequest):
             "similarity": similarity
         })
     
+    # 按相似度排序
     candidates_with_similarity.sort(key=lambda x: x["similarity"], reverse=True)
-    top_candidates = candidates_with_similarity[:min(len(candidates_with_similarity), request.max_concepts)]
+    
+    print(f"[INFO] 按语义相似度排序")
+    
+    # 动态阈值筛选：保持3-9个节点
+    SIMILARITY_THRESHOLD = 0.65  # 只选择真正相似度高的概念
+    MIN_NODES = 3
+    MAX_NODES = min(9, request.max_concepts)
+    
+    # 先筛选高于阈值的
+    high_quality = [c for c in candidates_with_similarity if c["similarity"] >= SIMILARITY_THRESHOLD]
+    
+    # 确保数量在合理范围内
+    if len(high_quality) < MIN_NODES:
+        top_candidates = candidates_with_similarity[:MIN_NODES]
+        print(f"[INFO] 阈值筛选结果不足{MIN_NODES}个，取相似度最高的{MIN_NODES}个")
+    elif len(high_quality) > MAX_NODES:
+        top_candidates = high_quality[:MAX_NODES]
+        print(f"[INFO] 阈值筛选结果超过{MAX_NODES}个，取相似度最高的{MAX_NODES}个")
+    else:
+        top_candidates = high_quality
+        print(f"[INFO] 阈值筛选结果: {len(high_quality)}个 (阈值={SIMILARITY_THRESHOLD})")
+    
+    print(f"[INFO] 选择了相似度最高的{len(top_candidates)}个概念:")
+    for c in top_candidates:
+        print(f"   - {c['name']} (语义相似度: {c['similarity']:.3f}, 学科: {c['discipline']})")
     
     # 4. 为每个概念创建节点
     for idx, candidate in enumerate(top_candidates, 1):
@@ -703,9 +730,9 @@ async def discover_concepts_disciplined(request: DiscoverDisciplinedRequest):
         edges.append({
             "source": center_node["id"],
             "target": node_id,
-            "relation": candidate["relation"],
+            "relation": candidate.get("relation", "related_to"),
             "weight": round(candidate["similarity"] * 0.9 + 0.1, 2),
-            "reasoning": f"{request.concept}与{term}在{discipline}视角下的{candidate['relation']}关系"
+            "reasoning": candidate.get("cross_principle") or candidate.get("reasoning") or f"{request.concept}与{term}在{discipline}领域存在关联"
         })
     
     result = {
@@ -925,7 +952,7 @@ async def expand_node(request: ExpandRequest):
         candidates_with_similarity.sort(key=lambda x: x["similarity"], reverse=True)
         
         # 动态阈值筛选：保持3-9个节点
-        SIMILARITY_THRESHOLD = 0.64  # 基于测试数据分析的合理阈值
+        SIMILARITY_THRESHOLD = 0.65  # 只选择真正相似度高的概念
         MIN_NODES = 3
         MAX_NODES = 9
         

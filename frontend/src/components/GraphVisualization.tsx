@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as d3 from 'd3';
 import { ConceptNode, ConceptEdge } from '../services/api';
 import './GraphVisualization.css';
@@ -11,6 +11,8 @@ interface GraphProps {
 
 const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick }) => {
   const svgRef = useRef<SVGSVGElement>(null);
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const zoomRef = useRef<any>(null);
 
   useEffect(() => {
     if (!svgRef.current || nodes.length === 0) return;
@@ -26,6 +28,19 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
       .attr('height', height)
       .attr('viewBox', `0 0 ${width} ${height}`)
       .attr('style', 'max-width: 100%; height: auto;');
+
+    const g = svg.append('g');
+
+    // 添加缩放功能
+    const zoom = d3.zoom<SVGSVGElement, unknown>()
+      .scaleExtent([0.5, 3])
+      .on('zoom', (event) => {
+        g.attr('transform', event.transform);
+        setZoomLevel(event.transform.k);
+      });
+
+    zoomRef.current = zoom;
+    svg.call(zoom as any);
 
     // 学科颜色映射
     const colorScale = d3.scaleOrdinal<string>()
@@ -64,28 +79,28 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
       // 径向力：将节点推向各自层级的圆环上
       .force('radial', d3.forceRadial((d: any) => getTargetRadius(d), width / 2, height / 2).strength(0.8));
 
-    // 添加缩放和拖拽支持
-    const g = svg.append('g');
-
-    svg.call(
-      d3.zoom<SVGSVGElement, unknown>()
-        .scaleExtent([0.1, 4])
-        .on('zoom', (event) => {
-          g.attr('transform', event.transform);
-        }) as any
-    );
-
-    // 绘制边
-    const link = g.append('g')
+    // 绘制边（每条边包含line和title）
+    const linkGroup = g.append('g')
       .attr('class', 'links')
-      .selectAll('line')
+      .selectAll('g')
       .data(edges)
       .enter()
-      .append('line')
+      .append('g');
+
+    // 添加连线
+    linkGroup.append('line')
       .attr('class', 'link')
       .attr('stroke', '#999')
       .attr('stroke-opacity', 0.5)
-      .attr('stroke-width', (d) => Math.max(2, d.weight * 5));
+      .attr('stroke-width', (d) => Math.max(2, d.weight * 5))
+      .style('cursor', 'help');  // 鼠标悬停时显示帮助图标
+    
+    // 为连线添加tooltip显示关联解释
+    linkGroup.append('title')
+      .text((d: any) => {
+        const reasoning = d.reasoning || `${d.source} 与 ${d.target} 的关联`;
+        return reasoning;
+      });
 
     // 绘制节点组
     const nodeGroup = g.append('g')
@@ -104,7 +119,7 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
       .attr('r', (d: any) => {
         // 根据深度计算节点大小：深度越深，节点越小
         const depth = d.depth || 0;
-        const baseSize = depth === 0 ? 25 : (depth === 1 ? 18 : 12);  // 根节点25，一级子节点18，二级+12
+        const baseSize = depth === 0 ? 35 : (depth === 1 ? 18 : 12);  // 根节点35，一级子节点18，二级+12
         const credibilityBonus = d.credibility ? d.credibility * 5 : 0;
         return baseSize + credibilityBonus;
       })
@@ -124,7 +139,7 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
         const element = d3.select(this);
         element.interrupt(); // 中断之前的动画
         const depth = d.depth || 0;
-        const baseSize = depth === 0 ? 25 : (depth === 1 ? 18 : 12);
+        const baseSize = depth === 0 ? 35 : (depth === 1 ? 18 : 12);
         const credibilityBonus = d.credibility ? d.credibility * 5 : 0;
         const currentRadius = baseSize + credibilityBonus;
         element
@@ -140,7 +155,7 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
           const element = d3.select(this);
           element.interrupt(); // 中断之前的动画
           const depth = d.depth || 0;
-          const baseSize = depth === 0 ? 25 : (depth === 1 ? 18 : 12);
+          const baseSize = depth === 0 ? 35 : (depth === 1 ? 18 : 12);
           const credibilityBonus = d.credibility ? d.credibility * 5 : 0;
           const currentRadius = baseSize + credibilityBonus;
           element
@@ -169,7 +184,7 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
 
     // 更新位置
     simulation.on('tick', () => {
-      link
+      linkGroup.selectAll('line')
         .attr('x1', (d: any) => d.source.x)
         .attr('y1', (d: any) => d.source.y)
         .attr('x2', (d: any) => d.target.x)
@@ -205,6 +220,42 @@ const GraphVisualization: React.FC<GraphProps> = ({ nodes, edges, onNodeClick })
   return (
     <div className="graph-container">
       <svg ref={svgRef}></svg>
+      <div className="zoom-controls">
+        <button
+          className="zoom-btn"
+          onClick={() => {
+            if (!svgRef.current || !zoomRef.current) return;
+            const svg = d3.select(svgRef.current);
+            svg.transition().duration(300).call(zoomRef.current.scaleBy, 1.2);
+          }}
+          title="放大"
+        >
+          +
+        </button>
+        <span className="zoom-level">{Math.round(zoomLevel * 100)}%</span>
+        <button
+          className="zoom-btn"
+          onClick={() => {
+            if (!svgRef.current || !zoomRef.current) return;
+            const svg = d3.select(svgRef.current);
+            svg.transition().duration(300).call(zoomRef.current.scaleBy, 0.833);
+          }}
+          title="缩小"
+        >
+          −
+        </button>
+        <button
+          className="zoom-btn reset-btn"
+          onClick={() => {
+            if (!svgRef.current || !zoomRef.current) return;
+            const svg = d3.select(svgRef.current);
+            svg.transition().duration(300).call(zoomRef.current.transform, d3.zoomIdentity);
+          }}
+          title="重置"
+        >
+          ⟲
+        </button>
+      </div>
     </div>
   );
 };

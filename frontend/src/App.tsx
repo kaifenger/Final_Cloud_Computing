@@ -45,7 +45,7 @@ const App: React.FC = () => {
     if (searchMode === 'bridge') {
       const validConcepts = bridgeConcepts.filter(c => c.trim());
       if (validConcepts.length < 2) {
-        message.warning('桥接发现至少需要2个概念');
+        message.warning('概念关联探索至少需要2个概念');
         return;
       }
     }
@@ -310,21 +310,21 @@ const App: React.FC = () => {
             onClick={() => setSearchMode('auto')}
             style={{ borderRadius: '20px' }}
           >
-            🔍 自动跨学科
+            🔍 全学科搜索
           </Button>
           <Button 
             type={searchMode === 'disciplined' ? 'primary' : 'default'}
             onClick={() => setSearchMode('disciplined')}
             style={{ borderRadius: '20px' }}
           >
-            🎯 限定学科
+            🎯 指定学科搜索
           </Button>
           <Button 
             type={searchMode === 'bridge' ? 'primary' : 'default'}
             onClick={() => setSearchMode('bridge')}
             style={{ borderRadius: '20px' }}
           >
-            🌉 桥接发现
+            🌉 概念关联探索
           </Button>
         </div>
         
