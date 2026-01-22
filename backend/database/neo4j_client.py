@@ -243,6 +243,140 @@ class Neo4jClient:
         """
         result = await self.query(cypher)
         return [r["discipline"] for r in result if r.get("discipline")]
+    
+    async def save_graph_data(self, nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]]) -> bool:
+        """批量保存图数据（节点和边）"""
+        if self.mock_mode:
+            logger.debug(f"[MOCK] 保存图数据: {len(nodes)}个节点, {len(edges)}条边")
+            return True
+        
+        # 如果driver为空，尝试重新连接
+        if not self.driver and not self.mock_mode:
+            logger.warning("Neo4j driver为空，尝试重新连接...")
+            await self.connect()
+        
+        if not self.driver:
+            logger.error("Neo4j未连接，无法保存数据")
+            return False
+        
+        try:
+            async with self.driver.session(database=self.database) as session:
+                # 批量创建节点
+                for node in nodes:
+                    await session.run("""
+                        MERGE (c:Concept {id: $id})
+                        SET c.label = $label,
+                            c.discipline = $discipline,
+                            c.definition = $definition,
+                            c.brief_summary = $brief_summary,
+                            c.credibility = $credibility,
+                            c.source = $source,
+                            c.wiki_url = $wiki_url,
+                            c.updated_at = timestamp()
+                        ON CREATE SET c.created_at = timestamp()
+                    """, {
+                        "id": node.get("id"),
+                        "label": node.get("label"),
+                        "discipline": node.get("discipline", "未分类"),
+                        "definition": node.get("definition", ""),
+                        "brief_summary": node.get("brief_summary", ""),
+                        "credibility": node.get("credibility", 0.5),
+                        "source": node.get("source", "LLM"),
+                        "wiki_url": node.get("wiki_url", "")
+                    })
+                
+                # 批量创建边
+                for edge in edges:
+                    await session.run("""
+                        MATCH (s:Concept {id: $source})
+                        MATCH (t:Concept {id: $target})
+                        MERGE (s)-[r:RELATES]->(t)
+                        SET r.relation = $relation,
+                            r.weight = $weight,
+                            r.reasoning = $reasoning,
+                            r.updated_at = timestamp()
+                        ON CREATE SET r.created_at = timestamp()
+                    """, {
+                        "source": edge.get("source"),
+                        "target": edge.get("target"),
+                        "relation": edge.get("relation", "related_to"),
+                        "weight": edge.get("weight", 0.5),
+                        "reasoning": edge.get("reasoning", "")
+                    })
+                
+                logger.info(f"成功保存到Neo4j: {len(nodes)}个节点, {len(edges)}条边")
+                return True
+        except Exception as e:
+            logger.error(f"保存到Neo4j失败: {e}")
+            return False
+    
+    async def get_graph_by_concept(self, concept: str, max_depth: int = 2) -> Optional[Dict[str, Any]]:
+        """根据概念标签获取完整子图（包含节点和边）"""
+        if self.mock_mode:
+            logger.debug(f"[MOCK] 查询子图: {concept}")
+            return None
+        
+        # 如果driver为空，尝试重新连接
+        if not self.driver and not self.mock_mode:
+            logger.warning("Neo4j driver为空，尝试重新连接...")
+            await self.connect()
+        
+        if not self.driver:
+            return None
+        
+        try:
+            async with self.driver.session(database=self.database) as session:
+                # 查询中心节点及其关联节点和边
+                # 注意：路径长度必须使用字面量，不能用参数
+                result = await session.run(f"""
+                    MATCH (center:Concept {{label: $concept}})
+                    OPTIONAL MATCH path = (center)-[r:RELATES*1..{max_depth}]-(related:Concept)
+                    WITH center, collect(DISTINCT related) as relateds, 
+                         collect(DISTINCT r) as rels
+                    RETURN center, relateds, rels
+                """, {"concept": concept})
+                
+                record = await result.single()
+                if not record or not record.get("center"):
+                    logger.info(f"Neo4j中未找到概念: {concept}")
+                    return None
+                
+                # 构建节点列表
+                nodes = []
+                center = dict(record["center"])
+                nodes.append(center)
+                
+                if record.get("relateds"):
+                    for related_node in record["relateds"]:
+                        if related_node:
+                            nodes.append(dict(related_node))
+                
+                # 构建边列表
+                edges = []
+                if record.get("rels"):
+                    for rel_list in record["rels"]:
+                        if rel_list:
+                            for rel in (rel_list if isinstance(rel_list, list) else [rel_list]):
+                                if rel:
+                                    edges.append({
+                                        "source": rel.start_node["id"],
+                                        "target": rel.end_node["id"],
+                                        "relation": dict(rel).get("relation", "related_to"),
+                                        "weight": dict(rel).get("weight", 0.5),
+                                        "reasoning": dict(rel).get("reasoning", "")
+                                    })
+                
+                logger.info(f"从Neo4j加载图数据: {len(nodes)}个节点, {len(edges)}条边")
+                return {
+                    "nodes": nodes,
+                    "edges": edges,
+                    "source": "neo4j"
+                }
+        except Exception as e:
+            logger.error(f"从Neo4j查询图数据失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
 
 
 # 全局实例

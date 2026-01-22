@@ -660,18 +660,43 @@ class ExpandRequest(BaseModel):
 @router.post("/discover", response_model=DiscoverResponse)
 async def discover_concepts(request: DiscoverRequest):
     """概念挖掘接口 - 使用真实LLM生成 + 语义相似度排序"""
-    # 缓存键包含版本号v2，避免使用旧的mock数据
-    cache_key = f"discover:v2:{request.concept}"
+    request_id = str(uuid.uuid4())
     
-    print(f"[INFO] 查询缓存: {cache_key}")
+    # 1. 优先从Neo4j读取（持久化存储）
+    print(f"[INFO] 步骤1：检查Neo4j持久化数据: {request.concept}")
+    neo4j_data = await neo4j_client.get_graph_by_concept(request.concept, max_depth=request.depth)
+    if neo4j_data and neo4j_data.get("nodes"):
+        print(f"[SUCCESS] ✅ Neo4j命中！从持久化存储加载: {request.concept}")
+        print(f"[INFO] 加载了{len(neo4j_data['nodes'])}个节点, {len(neo4j_data['edges'])}条边")
+        return DiscoverResponse(
+            status="success",
+            request_id=request_id,
+            data={
+                "nodes": neo4j_data["nodes"],
+                "edges": neo4j_data["edges"],
+                "metadata": {
+                    "source": "neo4j",
+                    "cached": True,
+                    "concept": request.concept
+                }
+            }
+        )
+    
+    # 2. Neo4j未命中，检查Redis缓存（临时缓存）
+    cache_key = f"discover:v2:{request.concept}"
+    print(f"[INFO] 步骤2：检查Redis缓存: {cache_key}")
     cached = await redis_client.get(cache_key)
     if cached:
-        print(f"[SUCCESS] ✅ 缓存命中！直接返回缓存数据: {request.concept}")
+        print(f"[SUCCESS] ✅ Redis缓存命中！: {request.concept}")
         print(f"[INFO] 跳过LLM调用，节省时间和成本")
-        return DiscoverResponse(status="success", request_id=cached["request_id"], data=cached["data"])
+        return DiscoverResponse(
+            status="success",
+            request_id=request_id,
+            data=cached
+        )
     
-    print(f"[INFO] ❌ 缓存未命中，开始LLM生成: {request.concept}")
-    request_id = str(uuid.uuid4())
+    # 3. 缓存都未命中，使用LLM生成新数据
+    print(f"[INFO] 步骤3：缓存未命中，使用LLM生成: {request.concept}")
     
     # 使用真实LLM生成（取代mock数据）
     result = await get_real_discovery_result(request.concept, max_concepts=min(request.max_concepts, 10))
@@ -680,19 +705,18 @@ async def discover_concepts(request: DiscoverRequest):
         nodes = result["data"]["nodes"]
         edges = result["data"]["edges"]
         
+        # 保存到Neo4j（持久化存储）
         try:
-            print(f"[INFO] 开始保存到Neo4j: {len(nodes)}个节点, {len(edges)}条边")
-            for node in nodes:
-                await neo4j_client.create_concept_node(node)
-            for edge in edges:
-                await neo4j_client.create_concept_edge(edge)
-            print(f"[SUCCESS] Neo4j保存成功: {len(nodes)}个节点, {len(edges)}条边")
+            saved = await neo4j_client.save_graph_data(nodes, edges)
+            if saved:
+                print(f"[SUCCESS] ✅ 已保存到Neo4j持久化存储")
         except Exception as e:
             print(f"[WARNING] Neo4j保存失败: {e}")
         
+        # 保存到Redis缓存（临时缓存，1小时）
         try:
-            await redis_client.set(cache_key, {"request_id": request_id, "data": result["data"]}, ex=3600)
-            print(f"[SUCCESS] Redis缓存成功: {request.concept}")
+            await redis_client.set(cache_key, result["data"], ex=3600)
+            print(f"[SUCCESS] ✅ 已保存到Redis缓存")
         except Exception as e:
             print(f"[WARNING] Redis缓存失败: {e}")
     
