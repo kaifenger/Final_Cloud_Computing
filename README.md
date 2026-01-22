@@ -1,33 +1,97 @@
 # ConceptGraph AI - 跨学科知识图谱智能体
 
-![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)
+![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)
+![React](https://img.shields.io/badge/React-18+-61DAFB.svg)
+![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
-![Status](https://img.shields.io/badge/Status-Development-yellow.svg)
+
+> **📦 交付说明**: 本项目已包含完整的Dockerfile、依赖配置文件、源码及部署指南 → 详见 [DEPLOYMENT.md](./DEPLOYMENT.md)
 
 ## 📖 项目简介
 
-**ConceptGraph AI** 是一个基于大语言模型（LLM）的跨学科知识图谱智能体系统。通过多Agent协作和Chain-of-Thought推理，自动挖掘不同学科领域之间的深层关联，构建可视化知识网络。
+**ConceptGraph AI** 是一个基于大语言模型（LLM）和图数据库的跨学科知识图谱挖掘系统。通过三层缓存架构（Neo4j + Redis + LLM）实现高性能概念关联发现和可视化。
 
-### 核心特性
+### 核心功能
 
-- ✅ **跨学科关联挖掘**：在6个学科领域（数学、物理、化学、生物、计算机、社会学）自动发现概念桥梁
-- ✅ **知识校验机制**：多源验证（Wikipedia + 学术论文），解决大模型幻觉问题
-- ✅ **CoT推理**：Chain-of-Thought推理链，确保关联质量
-- ✅ **动态图谱构建**：标准JSON格式输出，支持Neo4j图数据库
-- ✅ **云原生架构**：Docker + K8S + Redis + MinIO，易于部署和扩展
+1. **功能1 - 自动跨学科挖掘**: 输入单个概念，自动发现跨学科关联概念
+2. **功能2 - 指定学科挖掘**: 在指定学科范围内挖掘相关概念  
+3. **功能3 - 桥接概念发现**: 找到连接多个概念的"桥梁节点"
 
-### 痛点与价值
+### 技术亮点
 
-**痛点**：学习"神经网络"时，难以理解它与"生物学""数学""信息论"的深层联系
+- ✅ **三层缓存架构**: Neo4j（持久化） → Redis（1小时） → LLM（实时生成）
+- ✅ **语义相似度排序**: 基于Embedding的智能排序
+- ✅ **Wikipedia验证**: 多源验证提升可信度
+- ✅ **完整图可视化**: D3.js + Ant Design交互式展示
+- ✅ **Docker一键部署**: docker-compose快速启动
 
-**价值**：自动发现跨领域知识桥梁，帮助学习者建立完整的知识网络
+---
+
+## 🚀 快速开始（推荐）
+
+### Docker一键启动
+```bash
+# Windows
+start.bat
+
+# Linux/Mac  
+chmod +x start.sh && ./start.sh
+```
+
+### 访问系统
+- **前端界面**: http://localhost:3000
+- **后端API**: http://localhost:8000/docs
+- **Neo4j浏览器**: http://localhost:7474
+
+**完整部署指南**: 见 [DEPLOYMENT.md](./DEPLOYMENT.md)
+
+---
+
+## 📦 交付清单（课程要求）
+
+### ✅ Dockerfile
+- `backend/Dockerfile` - 后端Python服务镜像
+- `frontend/Dockerfile` - 前端React应用镜像
+- `docker-compose.yml` - 完整服务编排配置
+
+### ✅ 依赖配置文件
+- `requirements.txt` - Python依赖（FastAPI, Neo4j, Redis, OpenAI等）
+- `frontend/package.json` - Node.js依赖（React, Ant Design, D3.js等）
+
+### ✅ 完整源码
+```
+backend/              # FastAPI后端服务
+├── api/              # API路由和业务逻辑
+│   ├── routes.py     # 三个核心功能接口
+│   ├── multi_function_generator.py
+│   └── real_node_generator.py
+├── database/         # 数据库客户端
+│   ├── neo4j_client.py
+│   └── redis_client.py
+└── main.py           # 应用入口
+
+frontend/             # React前端应用
+├── src/
+│   ├── App.tsx       # 主应用组件
+│   ├── components/   # UI组件库
+│   └── services/     # API服务层
+
+shared/               # 共享数据模型
+prompts/              # LLM提示词模板
+```
+
+### ✅ 环境配置指南
+- **[DEPLOYMENT.md](./DEPLOYMENT.md)** - 完整部署指南（**必读**）
+- **[NEO4J_USAGE.md](./NEO4J_USAGE.md)** - Neo4j使用说明
+- `.env.example` - 环境变量配置模板
+- `start.sh` / `start.bat` - 快速启动脚本
 
 ---
 
 ## 🏗️ 系统架构
 
 ```
-用户输入概念 "熵"
+用户请求
     ↓
 AgentOrchestrator（编排器）
     ↓
