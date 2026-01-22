@@ -108,11 +108,13 @@ const NodeDetailPanel: React.FC<NodeDetailPanelProps> = ({
         border: 'none',
         color: 'white'
       }}
-      bodyStyle={{
-        background: 'white',
-        borderRadius: '12px',
-        margin: '8px',
-        padding: '24px'
+      styles={{
+        body: {
+          background: 'white',
+          borderRadius: '12px',
+          margin: '8px',
+          padding: '24px'
+        }
       }}
       title={
         <Button
@@ -184,7 +186,7 @@ const NodeDetailPanel: React.FC<NodeDetailPanelProps> = ({
             '0%': '#667eea',
             '100%': '#764ba2',
           }}
-          strokeWidth={12}
+          size={12}
         />
         <div style={{ fontSize: '11px', color: '#999', marginTop: '6px' }}>
           相似度分数: {(((selectedNode as any).similarity || selectedNode.credibility) * 100).toFixed(1)}% | 

@@ -175,8 +175,8 @@ const App: React.FC = () => {
             parentId: selectedNode.id  // 记录父节点
           }))
           .filter(newNode => 
-            newNode.id !== selectedNode.id && // 排除自身
-            !nodes.some(existing => existing.id === newNode.id) // 排除已存在的
+            newNode.label !== selectedNode.label && // 排除同名节点（根据label判断）
+            !nodes.some(existing => existing.label === newNode.label) // 排除已存在的同名节点
           );
         
         if (newNodes.length === 0) {
@@ -518,10 +518,12 @@ const App: React.FC = () => {
                       display: 'flex',
                       flexDirection: 'column'
                     }}
-                    bodyStyle={{
-                      overflowY: 'auto',
-                      flex: 1,
-                      padding: '16px'
+                    styles={{
+                      body: {
+                        overflowY: 'auto',
+                        flex: 1,
+                        padding: '16px'
+                      }
                     }}
                     title={
                       <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#667eea' }}>

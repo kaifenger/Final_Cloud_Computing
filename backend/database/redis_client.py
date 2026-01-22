@@ -16,11 +16,17 @@ class RedisClient:
         self.client = None
         self.mock_mode = os.getenv("MOCK_DB", "true").lower() == "true"
         self._mock_cache = {}
+        self._connected = False  # 添加连接状态标记
         
     async def connect(self):
         """连接到Redis"""
+        if self._connected:
+            logger.debug("Redis已经连接，跳过重复连接")
+            return
+            
         if self.mock_mode:
             logger.info("[MOCK] Redis客户端运行在Mock模式")
+            self._connected = True
             return
             
         try:
@@ -34,12 +40,15 @@ class RedisClient:
             # 测试连接
             await self.client.ping()
             logger.info(f"已连接到Redis: {self.host}:{self.port}")
+            self._connected = True
         except ImportError:
             logger.warning("redis包未安装，切换到Mock模式")
             self.mock_mode = True
+            self._connected = True
         except Exception as e:
             logger.error(f"Redis连接失败: {e}，切换到Mock模式")
             self.mock_mode = True
+            self._connected = True
     
     async def disconnect(self):
         """断开连接"""
@@ -66,16 +75,30 @@ class RedisClient:
             logger.debug(f"[MOCK] GET {key}: {'HIT' if value else 'MISS'}")
             return value
         
+        # 如果client为空，尝试重新连接
         if not self.client:
+            logger.warning(f"[Redis] client为空，尝试重新连接...")
+            await self.connect()
+        
+        if not self.client:
+            logger.warning(f"[Redis] GET失败: client为空, key={key}")
             return None
         
-        value = await self.client.get(key)
-        if value:
-            try:
-                return json.loads(value)
-            except:
-                return value
-        return None
+        try:
+            value = await self.client.get(key)
+            logger.info(f"[Redis] GET {key}: {'HIT' if value else 'MISS'}, raw_value_type={type(value).__name__ if value else 'None'}")
+            if value:
+                try:
+                    parsed = json.loads(value)
+                    logger.info(f"[Redis] 解析JSON成功, type={type(parsed).__name__}")
+                    return parsed
+                except Exception as e:
+                    logger.warning(f"[Redis] JSON解析失败: {e}, 返回原始值")
+                    return value
+            return None
+        except Exception as e:
+            logger.error(f"[Redis] GET异常: {e}")
+            return None
     
     async def set(self, key: str, value: Any, ex: Optional[int] = None):
         """设置缓存值"""
@@ -84,14 +107,29 @@ class RedisClient:
             logger.debug(f"[MOCK] SET {key} (ttl={ex}s)")
             return True
         
+        # 如果client为空，尝试重新连接
         if not self.client:
+            logger.warning(f"[Redis] client为空，尝试重新连接...")
+            await self.connect()
+        
+        if not self.client:
+            logger.warning(f"[Redis] SET失败: client为空, key={key}")
             return False
         
-        if isinstance(value, (dict, list)):
-            value = json.dumps(value, ensure_ascii=False)
-        
-        await self.client.set(key, value, ex=ex)
-        return True
+        try:
+            if isinstance(value, (dict, list)):
+                serialized = json.dumps(value, ensure_ascii=False)
+                logger.info(f"[Redis] SET {key}, value_type={type(value).__name__}, serialized_length={len(serialized)}, ttl={ex}s")
+            else:
+                serialized = value
+                logger.info(f"[Redis] SET {key}, value_type={type(value).__name__}, ttl={ex}s")
+            
+            await self.client.set(key, serialized, ex=ex)
+            logger.info(f"[Redis] SET成功: {key}")
+            return True
+        except Exception as e:
+            logger.error(f"[Redis] SET异常: {e}")
+            return False
     
     async def delete(self, key: str):
         """删除缓存"""

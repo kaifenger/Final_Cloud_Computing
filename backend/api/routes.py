@@ -92,8 +92,8 @@ async def generate_brief_summary(concept: str, wiki_definition: str = "") -> str
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.3,
-                max_tokens=300,
-                extra_body={"reasoning": {"enabled": True}}
+                max_tokens=500,
+                extra_body={"reasoning": {"enabled": False}}
             ),
             timeout=15.0
         )
@@ -226,15 +226,24 @@ async def get_wikipedia_definition(concept: str, max_length: int = 500) -> Dict[
     loop = asyncio.get_event_loop()
     
     try:
+        # 添加10秒超时
         wikipedia.set_lang("zh")
-        page = await loop.run_in_executor(None, wikipedia.page, concept)
+        page = await asyncio.wait_for(
+            loop.run_in_executor(None, wikipedia.page, concept),
+            timeout=10.0
+        )
         summary = page.summary[:max_length] if len(page.summary) > max_length else page.summary
         print(f"[SUCCESS] 中文Wikipedia找到: {concept}")
         return {"definition": summary, "exists": True, "url": page.url, "source": "Wikipedia"}
+    except asyncio.TimeoutError:
+        print(f"[WARNING] 中文Wikipedia查询超时: {concept}")
     except wikipedia.exceptions.DisambiguationError as e:
         if e.options:
             try:
-                page = await loop.run_in_executor(None, wikipedia.page, e.options[0])
+                page = await asyncio.wait_for(
+                    loop.run_in_executor(None, wikipedia.page, e.options[0]),
+                    timeout=10.0
+                )
                 summary = page.summary[:max_length] if len(page.summary) > max_length else page.summary
                 return {"definition": summary, "exists": True, "url": page.url, "source": "Wikipedia"}
             except Exception:
@@ -246,14 +255,22 @@ async def get_wikipedia_definition(concept: str, max_length: int = 500) -> Dict[
     
     try:
         wikipedia.set_lang("en")
-        page = await loop.run_in_executor(None, wikipedia.page, concept)
+        page = await asyncio.wait_for(
+            loop.run_in_executor(None, wikipedia.page, concept),
+            timeout=10.0
+        )
         summary = page.summary[:max_length] if len(page.summary) > max_length else page.summary
         print(f"[SUCCESS] 英文Wikipedia找到: {concept}")
         return {"definition": summary, "exists": True, "url": page.url, "source": "Wikipedia"}
+    except asyncio.TimeoutError:
+        print(f"[WARNING] 英文Wikipedia查询超时: {concept}")
     except wikipedia.exceptions.DisambiguationError as e:
         if e.options:
             try:
-                page = await loop.run_in_executor(None, wikipedia.page, e.options[0])
+                page = await asyncio.wait_for(
+                    loop.run_in_executor(None, wikipedia.page, e.options[0]),
+                    timeout=10.0
+                )
                 summary = page.summary[:max_length] if len(page.summary) > max_length else page.summary
                 return {"definition": summary, "exists": True, "url": page.url, "source": "Wikipedia"}
             except Exception:
@@ -645,11 +662,15 @@ async def discover_concepts(request: DiscoverRequest):
     """概念挖掘接口 - 使用真实LLM生成 + 语义相似度排序"""
     # 缓存键包含版本号v2，避免使用旧的mock数据
     cache_key = f"discover:v2:{request.concept}"
+    
+    print(f"[INFO] 查询缓存: {cache_key}")
     cached = await redis_client.get(cache_key)
     if cached:
-        print(f"[INFO] 返回缓存数据: {request.concept}")
+        print(f"[SUCCESS] ✅ 缓存命中！直接返回缓存数据: {request.concept}")
+        print(f"[INFO] 跳过LLM调用，节省时间和成本")
         return DiscoverResponse(status="success", request_id=cached["request_id"], data=cached["data"])
     
+    print(f"[INFO] ❌ 缓存未命中，开始LLM生成: {request.concept}")
     request_id = str(uuid.uuid4())
     
     # 使用真实LLM生成（取代mock数据）
@@ -660,17 +681,20 @@ async def discover_concepts(request: DiscoverRequest):
         edges = result["data"]["edges"]
         
         try:
+            print(f"[INFO] 开始保存到Neo4j: {len(nodes)}个节点, {len(edges)}条边")
             for node in nodes:
                 await neo4j_client.create_concept_node(node)
             for edge in edges:
                 await neo4j_client.create_concept_edge(edge)
+            print(f"[SUCCESS] Neo4j保存成功: {len(nodes)}个节点, {len(edges)}条边")
         except Exception as e:
-            print(f"[WARNING] 保存失败: {e}")
+            print(f"[WARNING] Neo4j保存失败: {e}")
         
         try:
             await redis_client.set(cache_key, {"request_id": request_id, "data": result["data"]}, ex=3600)
+            print(f"[SUCCESS] Redis缓存成功: {request.concept}")
         except Exception as e:
-            print(f"[WARNING] 缓存失败: {e}")
+            print(f"[WARNING] Redis缓存失败: {e}")
     
     return DiscoverResponse(status=result.get("status", "success"), request_id=request_id, data=result.get("data", {}))
 
@@ -687,6 +711,26 @@ async def discover_concepts_disciplined(request: DiscoverDisciplinedRequest):
     逻辑：只在指定学科中挖掘关联概念
     """
     print(f"[INFO] 功能2 - 指定学科挖掘: {request.concept}, 学科: {request.disciplines}")
+    
+    # 生成缓存key（包含concept和disciplines的组合）
+    sorted_disciplines = sorted(request.disciplines)  # 排序保证一致性
+    disciplines_str = "_".join(sorted_disciplines)
+    cache_key = f"discover:disciplined:v2:{request.concept}:{disciplines_str}"
+    
+    # 检查Redis缓存
+    try:
+        cached_result = await redis_client.get(cache_key)
+        if cached_result:
+            print(f"[SUCCESS] ✅ 缓存命中 - 功能2: {cache_key}")
+            return DiscoverResponse(
+                status="success",
+                request_id=str(uuid.uuid4()),
+                data=cached_result
+            )
+        else:
+            print(f"[INFO] ❌ 缓存未命中 - 功能2: {cache_key}")
+    except Exception as e:
+        print(f"[WARNING] Redis缓存读取失败: {e}")
     
     # 导入功能2生成器
     try:
@@ -823,6 +867,21 @@ async def discover_concepts_disciplined(request: DiscoverDisciplinedRequest):
     
     print(f"[SUCCESS] 功能2完成: 生成{len(nodes)-1}个概念")
     
+    # 保存到Redis缓存（3600秒 = 1小时）
+    try:
+        await redis_client.set(cache_key, result, ex=3600)
+        print(f"[INFO] ✅ 已缓存功能2结果: {cache_key}")
+    except Exception as e:
+        print(f"[WARNING] Redis缓存保存失败: {e}")
+    
+    # 保存到Neo4j（如果配置了）
+    try:
+        if hasattr(neo4j_client, 'save_graph_data'):
+            await neo4j_client.save_graph_data(nodes, edges)
+            print(f"[INFO] ✅ 已保存到Neo4j")
+    except Exception as e:
+        print(f"[WARNING] Neo4j保存失败: {e}")
+    
     return DiscoverResponse(status="success", request_id=request_id, data=result)
 
 
@@ -837,6 +896,26 @@ async def discover_bridge_concepts(request: BridgeRequest):
     逻辑：寻找连接这些概念的"桥梁概念"节点
     """
     print(f"[INFO] 功能3 - 桥梁发现: {request.concepts}")
+    
+    # 生成缓存key（包含所有concepts的组合）
+    sorted_concepts = sorted(request.concepts)  # 排序保证一致性
+    concepts_str = "_".join(sorted_concepts)
+    cache_key = f"discover:bridge:v2:{concepts_str}:{request.max_bridges}"
+    
+    # 检查Redis缓存
+    try:
+        cached_result = await redis_client.get(cache_key)
+        if cached_result:
+            print(f"[SUCCESS] ✅ 缓存命中 - 功能3: {cache_key}")
+            return DiscoverResponse(
+                status="success",
+                request_id=str(uuid.uuid4()),
+                data=cached_result
+            )
+        else:
+            print(f"[INFO] ❌ 缓存未命中 - 功能3: {cache_key}")
+    except Exception as e:
+        print(f"[WARNING] Redis缓存读取失败: {e}")
     
     # 导入功能3生成器
     try:
@@ -975,6 +1054,21 @@ async def discover_bridge_concepts(request: BridgeRequest):
             "bridge_analysis": bridge_analysis  # 添加桥接路径分析数据
         }
     }
+    
+    # 保存到Redis缓存（3600秒 = 1小时）
+    try:
+        await redis_client.set(cache_key, result, ex=3600)
+        print(f"[INFO] ✅ 已缓存功能3结果: {cache_key}")
+    except Exception as e:
+        print(f"[WARNING] Redis缓存保存失败: {e}")
+    
+    # 保存到Neo4j（如果配置了）
+    try:
+        if hasattr(neo4j_client, 'save_graph_data'):
+            await neo4j_client.save_graph_data(nodes, edges)
+            print(f"[INFO] ✅ 已保存到Neo4j")
+    except Exception as e:
+        print(f"[WARNING] Neo4j保存失败: {e}")
     
     return DiscoverResponse(status="success", request_id=request_id, data=result)
 
@@ -1228,3 +1322,63 @@ async def ai_chat(request: dict):
     except Exception as e:
         print(f"[ERROR] AI问答失败: {str(e)}")
         return {"status": "error", "data": {"answer": "处理问题时出现错误", "sources": []}}
+
+
+@router.delete("/cache/clear")
+async def clear_cache(pattern: str = "*"):
+    """
+    清除Redis缓存
+    
+    参数:
+    - pattern: 缓存key模式，默认"*"清除所有
+      - "*": 清除所有缓存
+      - "discover:v2:*": 清除功能1缓存
+      - "discover:disciplined:v2:*": 清除功能2缓存
+      - "discover:bridge:v2:*": 清除功能3缓存
+    """
+    try:
+        if redis_client.mock_mode:
+            # Mock模式：清除内存缓存
+            if pattern == "*":
+                count = len(redis_client._mock_cache)
+                redis_client._mock_cache.clear()
+                print(f"[INFO] Mock模式：已清除所有缓存 ({count}个key)")
+            else:
+                # 简单的模式匹配
+                pattern_prefix = pattern.replace("*", "")
+                keys_to_delete = [k for k in redis_client._mock_cache.keys() if k.startswith(pattern_prefix)]
+                for key in keys_to_delete:
+                    del redis_client._mock_cache[key]
+                print(f"[INFO] Mock模式：已清除匹配 '{pattern}' 的缓存 ({len(keys_to_delete)}个key)")
+                count = len(keys_to_delete)
+        else:
+            # 真实Redis模式
+            if not redis_client.client:
+                await redis_client.connect()
+            
+            if pattern == "*":
+                # 清除所有key
+                await redis_client.client.flushdb()
+                count = "all"
+                print(f"[INFO] Redis：已清除所有缓存")
+            else:
+                # 根据模式删除
+                keys = []
+                async for key in redis_client.client.scan_iter(match=pattern):
+                    keys.append(key)
+                
+                if keys:
+                    await redis_client.client.delete(*keys)
+                count = len(keys)
+                print(f"[INFO] Redis：已清除匹配 '{pattern}' 的缓存 ({count}个key)")
+        
+        return {
+            "status": "success",
+            "message": f"已清除缓存",
+            "pattern": pattern,
+            "deleted_count": count
+        }
+    except Exception as e:
+        print(f"[ERROR] 清除缓存失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"清除缓存失败: {str(e)}")
+

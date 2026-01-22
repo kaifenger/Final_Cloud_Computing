@@ -62,7 +62,9 @@ AgentOrchestrator（编排器）
 ### 环境要求
 
 - Python 3.9+
+- Node.js 16+
 - OpenRouter API Key（推荐）或 OpenAI API Key
+- Docker（可选）
 
 ### 安装步骤
 
@@ -71,19 +73,103 @@ AgentOrchestrator（编排器）
 git clone git@github.com:kaifenger/Final_Cloud_Computing.git
 cd Final_Cloud_Computing
 
-# 2. 创建虚拟环境
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# 3. 安装依赖
-pip install -r agents/requirements.txt
-
-# 4. 配置环境变量
+# 2. 配置环境变量
 cp .env.example .env
-# 编辑.env文件，填入API Key：
+# 编辑.env文件，填入API Key和数据库配置：
 # OPENROUTER_API_KEY=sk-or-v1-your-key-here
-# LLM_MODEL=google/gemini-3-pro-preview
+# LLM_MODEL=google/gemini-flash-1.5
+# 
+# 数据库密码需与Docker启动指令匹配：
+# NEO4J_PASSWORD=password（与docker run中的NEO4J_AUTH一致）
+# REDIS_PASSWORD=（留空，因为Redis容器未设置密码）
 ```
+
+### 启动方式
+
+#### 方式一：手动启动（开发环境）
+
+**启动数据库（使用Docker）：**
+```bash
+# 如果容器已存在，先启动已有容器
+docker start redis neo4j
+
+# 如果容器不存在或需要重新创建，执行以下命令：
+
+# 启动Redis（端口6379）
+docker run -d --name redis -p 6379:6379 redis:latest
+
+# 启动Neo4j（端口7474浏览器界面, 7687数据库连接）
+docker run -d --name neo4j \
+  -p 7474:7474 -p 7687:7687 \
+  -e NEO4J_AUTH=neo4j/password \
+  neo4j:latest
+
+# 查看容器状态
+docker ps
+
+# 访问Neo4j浏览器界面：http://localhost:7474
+# 默认用户名: neo4j, 密码: password
+
+# （可选）停止数据库
+# docker stop redis neo4j
+
+# （可选）删除容器（需要重新创建时使用）
+# docker rm redis neo4j
+```
+
+**启动后端：**
+```bash
+# 安装后端依赖
+pip install -r backend/requirements.txt
+
+# 启动后端服务（端口8000）
+python start_backend.py
+```
+
+**启动前端：**
+```bash
+# 进入前端目录
+cd frontend
+
+# 安装前端依赖
+npm install
+
+# 启动前端开发服务器（端口3000）
+npm start
+```
+
+访问 http://localhost:3000 即可使用系统。
+
+#### 方式二：Docker 启动（生产环境）
+
+**使用 docker-compose（推荐）：**
+```bash
+# 构建并启动所有服务
+docker-compose up -d
+
+# 查看日志
+docker-compose logs -f
+
+# 停止服务
+docker-compose down
+```
+
+**单独使用 Docker：**
+```bash
+# 构建后端镜像
+docker build -t conceptgraph-backend -f backend/Dockerfile .
+
+# 运行后端容器
+docker run -d -p 8000:8000 --env-file .env conceptgraph-backend
+
+# 构建前端镜像
+docker build -t conceptgraph-frontend -f frontend/Dockerfile ./frontend
+
+# 运行前端容器
+docker run -d -p 3000:80 conceptgraph-frontend
+```
+
+访问 http://localhost:3000 即可使用系统。
 
 ### 基础使用
 

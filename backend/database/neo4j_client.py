@@ -14,11 +14,17 @@ class Neo4jClient:
         self.database = os.getenv("NEO4J_DATABASE", "conceptgraph")
         self.driver = None
         self.mock_mode = os.getenv("MOCK_DB", "true").lower() == "true"
+        self._connected = False  # 添加连接状态标记
         
     async def connect(self):
         """连接到Neo4j数据库"""
+        if self._connected:
+            logger.debug("Neo4j已经连接，跳过重复连接")
+            return
+            
         if self.mock_mode:
             logger.info("[MOCK] Neo4j客户端运行在Mock模式")
+            self._connected = True
             return
             
         try:
@@ -31,12 +37,15 @@ class Neo4jClient:
             async with self.driver.session(database=self.database) as session:
                 await session.run("RETURN 1")
             logger.info(f"已连接到Neo4j: {self.uri}")
+            self._connected = True
         except ImportError:
             logger.warning("neo4j包未安装，切换到Mock模式")
             self.mock_mode = True
+            self._connected = True
         except Exception as e:
             logger.error(f"Neo4j连接失败: {e}，切换到Mock模式")
             self.mock_mode = True
+            self._connected = True
     
     async def disconnect(self):
         """断开连接"""
@@ -56,7 +65,13 @@ class Neo4jClient:
             logger.debug(f"[MOCK] 执行查询: {cypher[:100]}...")
             return self._mock_query_result(cypher, parameters)
         
+        # 如果driver为空但不是mock模式，尝试重新连接
+        if not self.driver and not self.mock_mode:
+            logger.warning("Neo4j driver为空，尝试重新连接...")
+            await self.connect()
+        
         if not self.driver:
+            logger.error(f"Neo4j driver为空，mock_mode={self.mock_mode}, uri={self.uri}")
             raise RuntimeError("未连接到Neo4j数据库")
         
         async with self.driver.session(database=self.database) as session:
