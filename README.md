@@ -7,7 +7,7 @@
 
 > **交付说明**: 本项目已包含完整的Dockerfile、依赖配置文件、源码及部署指南，详见下文和ENVIRONMENT_SETUP.md
 
-> **讲解视频支持两种查看方式：**（1）百度网盘：通过网盘分享的文件：云计算期末项目介绍视频_张凯诚&肖璟仪.mp4
+**讲解视频支持两种查看方式：**（1）百度网盘：通过网盘分享的文件：云计算期末项目介绍视频_张凯诚&肖璟仪.mp4
 链接: https://pan.baidu.com/s/1X6FCAfteKOZoLAdPBkA7tA?pwd=u8pt 提取码: u8pt
 
 (2)bilibili: https://www.bilibili.com/video/BV1EnBfBtEme/?spm_id_from=333.1387.upload.video_card.click&vd_source=a90c2203ec4b3b9d67ddad0d9e7bc495
